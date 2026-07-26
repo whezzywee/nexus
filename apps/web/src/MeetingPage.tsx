@@ -9,6 +9,7 @@ import {
   MeetingSignalingClient,
   MeshMediaRouter,
   parseMeetingUrl,
+  stunIceServer,
   turnIceServer,
 } from "@nexus/webrtc";
 import { Camera, Link, Mic, PhoneOff, Share2, Signal, Users } from "lucide-react";
@@ -21,6 +22,10 @@ function randomId(prefix: string): string {
 
 function shortParticipant(participantId: string): string {
   return participantId.slice(-6);
+}
+
+function configuredEndpoint(value: string): URL {
+  return new URL(value, window.location.href);
 }
 
 function initialInvite(): { invite: MeetingInvite | null; error: string | null } {
@@ -89,7 +94,7 @@ export function MeetingPage() {
     if (invite) return invite;
     const endpoint = import.meta.env.VITE_NEXUS_MEETING_INVITE_URL as string | undefined;
     if (!endpoint) throw new Error("Meeting invitations are not configured.");
-    const created = await createMeetingInvite(new URL(endpoint), authorization, {
+    const created = await createMeetingInvite(configuredEndpoint(endpoint), authorization, {
       roomId: roomId.current,
       roomName: "Friends meeting",
     });
@@ -137,7 +142,7 @@ export function MeetingPage() {
     if (!endpoint || hostBusy) return;
     setHostBusy(true);
     try {
-      const session = await createMeetingHostSession(new URL(endpoint), hostPassphrase);
+      const session = await createMeetingHostSession(configuredEndpoint(endpoint), hostPassphrase);
       hostSession.current = session;
       setHostPassphrase("");
       await ensureInvite(session.authorization);
@@ -186,14 +191,20 @@ export function MeetingPage() {
             });
         },
       });
+      const iceServers: RTCIceServer[] = [];
+      const stun = stunIceServer(import.meta.env.VITE_NEXUS_STUN_URLS as string | undefined);
+      if (stun) iceServers.push(stun);
       const turnEndpoint = import.meta.env.VITE_NEXUS_TURN_CREDENTIAL_URL as string | undefined;
-      const iceServers = turnEndpoint
-        ? [
-            turnIceServer(
-              await fetchTurnCredential(new URL(turnEndpoint), `Bearer ${invite.accessToken}`),
+      if (turnEndpoint) {
+        iceServers.push(
+          turnIceServer(
+            await fetchTurnCredential(
+              configuredEndpoint(turnEndpoint),
+              `Bearer ${invite.accessToken}`,
             ),
-          ]
-        : [];
+          ),
+        );
+      }
       await router.join({
         callId: invite.roomId,
         localPeerId: participantId.current,
@@ -204,7 +215,7 @@ export function MeetingPage() {
       const signalingEndpoint = import.meta.env.VITE_NEXUS_MEETING_SIGNAL_URL as string | undefined;
       if (!signalingEndpoint) throw new Error("Meeting signaling is not configured.");
       signaling = new MeetingSignalingClient({
-        endpoint: new URL(signalingEndpoint),
+        endpoint: configuredEndpoint(signalingEndpoint),
         invite,
         participantId: participantId.current,
         events: {

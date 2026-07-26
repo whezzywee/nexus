@@ -8,6 +8,11 @@ publishing a raw Freenet node administration surface.
 The browser speaks HTTPS and secure WebSocket to the gateway. The gateway uses
 the pinned Freenet client API on a private loopback or private network.
 
+When `NEXUS_WEB_STATIC_DIR` points to a built Nexus Web directory, the gateway
+also serves those static files as a fallback. This is used by the temporary
+single-origin friend preview; it does not change the gateway's authority or
+enable a Freenet simulator.
+
 ## Implemented authorization boundary
 
 The current update endpoint requires a bearer token shaped as

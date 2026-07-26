@@ -69,6 +69,31 @@ Evidence is under the ignored directory
 path locally. It does not replace the external two-network phone and relay-only
 acceptance required after deployment.
 
+## Temporary public-edge acceptance
+
+The self-hosted `pnpm friend:preview` path was exercised through its generated
+public `https://…trycloudflare.com` origin:
+
+- the public health endpoint returned `ready` with Freenet explicitly
+  `disabled`;
+- the absent contract-update route rejected a POST rather than forwarding it;
+- a desktop host exchanged the local private passphrase for a short-lived
+  meeting token and generated a public fragment-only invitation;
+- a separate 390×844 browser profile opened the public URL and joined over the
+  tunneled WSS endpoint;
+- enabling its microphone and camera produced one live audio and one live video
+  track at the host;
+- the public phone layout remained exactly 390 pixels wide with no horizontal
+  overflow;
+- both public browser error collections were empty;
+- tunnel and gateway logs contained no `nexus-meeting` fragment, room key, or
+  bearer join payload.
+
+Screenshots are in ignored local evidence storage at
+`.artifacts/qa/public-friend-preview-20260726/`. Both browser profiles ran on
+the same test computer, so this proves the public HTTPS/WSS path but not a
+physical-phone, independent-network, or TURN-relay route.
+
 ## Remaining public-release evidence
 
 - Deploy Nexus Web and the gateway on operator-controlled HTTPS/WSS origins.

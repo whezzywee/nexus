@@ -97,6 +97,21 @@ export function turnIceServer(credential: TurnCredential): RTCIceServer {
   };
 }
 
+export function stunIceServer(rawUrls?: string): RTCIceServer | null {
+  const urls = (rawUrls ?? "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  if (urls.length === 0) return null;
+  if (
+    urls.length > 8 ||
+    urls.some((url) => url.length > 512 || (!url.startsWith("stun:") && !url.startsWith("stuns:")))
+  ) {
+    throw new Error("STUN configuration must contain 1–8 bounded stun: or stuns: URLs");
+  }
+  return { urls };
+}
+
 export interface MediaRouterEvents {
   onIceCandidate(signal: IceSignal): void;
   onRemoteTrack(peerId: string, event: RTCTrackEvent): void;

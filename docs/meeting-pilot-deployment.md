@@ -79,8 +79,8 @@ curl --fail --silent --show-error \
 ```
 
 The response must report `status: "ready"` and `freenet: "disabled"`. A request
-to `/nexus/v1/contracts/example/updates` must return 404 because the contract
-route is not registered in meeting-only mode.
+to `/nexus/v1/contracts/example/updates` must return 404 or 405 because the
+contract route is not registered in meeting-only mode.
 
 Open `https://meet.example.com/`, choose **Share link**, enter the private host
 passphrase, and choose **Share link** again. The recipient URL carries its

@@ -36,6 +36,7 @@ use tokio::{
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
+    services::ServeDir,
     set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
@@ -90,6 +91,7 @@ struct GatewayConfig {
     meeting_host_secret: Option<Arc<[u8]>>,
     meeting_host_session_ttl_seconds: u64,
     trust_proxy_headers: bool,
+    web_static_dir: Option<PathBuf>,
 }
 
 impl GatewayConfig {
@@ -138,6 +140,16 @@ impl GatewayConfig {
             "NEXUS_MEETING_HOST_SECRET",
             "NEXUS_MEETING_HOST_SECRET_FILE",
         )?;
+        let web_static_dir = env::var_os("NEXUS_WEB_STATIC_DIR")
+            .map(PathBuf::from)
+            .map(|path| {
+                if !path.is_dir() {
+                    return Err("NEXUS_WEB_STATIC_DIR must point to an existing directory".into());
+                }
+                std::fs::canonicalize(path)
+                    .map_err(|error| format!("Could not resolve NEXUS_WEB_STATIC_DIR: {error}"))
+            })
+            .transpose()?;
         Ok(Self {
             gateway_id: env::var("NEXUS_GATEWAY_ID").unwrap_or_else(|_| "nexus-gateway".into()),
             bind,
@@ -164,6 +176,7 @@ impl GatewayConfig {
                 MAX_MEETING_HOST_SESSION_TTL_SECONDS,
             )?,
             trust_proxy_headers: env_flag("NEXUS_GATEWAY_TRUST_PROXY_HEADERS", false)?,
+            web_static_dir,
         })
     }
 }
@@ -1550,6 +1563,7 @@ async fn forward_update(
 fn router(state: Arc<GatewayState>) -> Router {
     let origins = state.config.allowed_origins.clone();
     let expose_contract_updates = state.config.upstream.is_some();
+    let web_static_dir = state.config.web_static_dir.clone();
     let router = Router::new()
         .route("/nexus/v1/health", get(health))
         .route("/nexus/v1/turn-credentials", post(issue_turn_credential))
@@ -1581,6 +1595,11 @@ fn router(state: Arc<GatewayState>) -> Router {
         .layer(TraceLayer::new_for_http());
     let router = if expose_contract_updates {
         router.route("/nexus/v1/contracts/{key}/updates", post(submit_update))
+    } else {
+        router
+    };
+    let router = if let Some(directory) = web_static_dir {
+        router.fallback_service(ServeDir::new(directory).append_index_html_on_directories(true))
     } else {
         router
     };

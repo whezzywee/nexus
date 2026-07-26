@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { stunIceServer } from "./index";
 import {
   buildMeetingUrl,
   createMeetingHostSession,
@@ -112,5 +113,15 @@ describe("meeting links", () => {
       }),
     );
     fetcher.mockRestore();
+  });
+});
+
+describe("STUN configuration", () => {
+  it("accepts bounded comma-separated STUN URLs", () => {
+    expect(stunIceServer("stun:stun.cloudflare.com:3478, stuns:stun.example.test:5349")).toEqual({
+      urls: ["stun:stun.cloudflare.com:3478", "stuns:stun.example.test:5349"],
+    });
+    expect(stunIceServer("")).toBeNull();
+    expect(() => stunIceServer("turn:relay.example.test:3478")).toThrow("STUN configuration");
   });
 });

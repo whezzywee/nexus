@@ -12,6 +12,8 @@
     "dev:desktop": "pnpm --filter @nexus/desktop tauri dev",
     "dev:desktop-ui": "pnpm --filter @nexus/desktop dev",
     "dev:gateway": "cargo run -p nexus-gateway",
+    "friend:preview": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/friend-preview.ps1",
+    "friend:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/friend-preview-stop.ps1",
     "dev:phase1": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client tauri",
     "dev:phase1:desktop-ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client desktop",
     "dev:phase1:web": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client web",
