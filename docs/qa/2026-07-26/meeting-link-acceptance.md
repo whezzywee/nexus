@@ -94,12 +94,42 @@ Screenshots are in ignored local evidence storage at
 the same test computer, so this proves the public HTTPS/WSS path but not a
 physical-phone, independent-network, or TURN-relay route.
 
+## Independent-network reciprocal media acceptance
+
+GitHub Actions run
+[`30218636442`](https://github.com/whezzywee/nexus/actions/runs/30218636442)
+exercised the public friend-preview origin from a GitHub-hosted Linux runner
+while a separate Chromium peer remained on the operator's local network:
+
+- the remote peer used a 390×844 Chromium viewport with deterministic fake
+  microphone and camera devices;
+- the local and remote peers independently hashed the invitation fragment and
+  produced the same SHA-256 fingerprint, proving that both received the same
+  room capability and 256-bit room key without publishing either value;
+- each side received one live remote audio track and one live remote video
+  track;
+- the remote page ran in a secure context with
+  `clientWidth = scrollWidth = 390`;
+- the connection used the friend-preview STUN-only configuration, so no TURN
+  relay or fake signaling/media transport could satisfy the test;
+- the remote workflow retained JSON and screenshot evidence, and the local
+  reciprocal screenshot is in
+  `.artifacts/qa/independent-network-20260726/`.
+
+This acceptance exposed and fixed two real signal-ordering races. Inbound
+WebSocket frames were previously decrypted concurrently, and outbound ICE
+frames could finish encryption in a different order from their assigned
+sequence numbers. Both paths are now serialized, with forced-race regression
+tests in `packages/webrtc/src/meeting-signaling.test.ts`.
+
 ## Remaining public-release evidence
 
-- Deploy Nexus Web and the gateway on operator-controlled HTTPS/WSS origins.
+- Use an operator-controlled HTTPS/WSS hostname when stable uptime is required;
+  account-less Quick Tunnels remain a temporary friend-preview mechanism.
 - Replace the private-pilot host passphrase with account authentication before
   allowing untrusted users to create meetings.
-- Deploy production TURN and pass relay-only calls from independent networks.
+- Deploy TURN and pass relay-only calls only for supported networks that cannot
+  establish the now-proven direct STUN route.
 - Test actual iOS and Android browsers, permission denial/recovery, background
   transitions, Bluetooth routing, and network changes.
 - Complete the existing independent review, soak, pilot, accessibility,
