@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $runtimeDirectory = Join-Path $repositoryRoot ".runtime\friend-preview"
 $sessionPath = Join-Path $runtimeDirectory "session.json"
+$previewWebDirectory = Join-Path $runtimeDirectory "web-dist"
 
 New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 
@@ -126,6 +127,23 @@ try {
     Pop-Location
 }
 
+$runtimeRoot = [IO.Path]::GetFullPath($runtimeDirectory).TrimEnd(
+    [IO.Path]::DirectorySeparatorChar,
+    [IO.Path]::AltDirectorySeparatorChar
+)
+$previewWebRoot = [IO.Path]::GetFullPath($previewWebDirectory)
+if (-not $previewWebRoot.StartsWith(
+    $runtimeRoot + [IO.Path]::DirectorySeparatorChar,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "The preview web directory resolved outside runtime storage."
+}
+if (Test-Path -LiteralPath $previewWebRoot) {
+    Remove-Item -LiteralPath $previewWebRoot -Recurse -Force
+}
+$builtWebDirectory = (Resolve-Path (Join-Path $repositoryRoot "apps\web\dist")).Path
+Copy-Item -LiteralPath $builtWebDirectory -Destination $previewWebRoot -Recurse
+
 $tunnelOutput = Join-Path $runtimeDirectory "cloudflared.stdout.log"
 $tunnelError = Join-Path $runtimeDirectory "cloudflared.stderr.log"
 $tunnel = Start-Process -FilePath $cloudflared `
@@ -166,7 +184,7 @@ $env:NEXUS_GATEWAY_ORIGINS = $publicUrl
 $env:NEXUS_MEETING_HOST_SECRET_FILE = $hostSecretPath
 $env:NEXUS_MEETING_HOST_SESSION_TTL_SECONDS = "900"
 $env:NEXUS_MEETING_INVITE_TTL_SECONDS = "86400"
-$env:NEXUS_WEB_STATIC_DIR = (Resolve-Path (Join-Path $repositoryRoot "apps\web\dist")).Path
+$env:NEXUS_WEB_STATIC_DIR = (Resolve-Path $previewWebRoot).Path
 $env:RUST_LOG = "nexus_gateway=info,tower_http=info"
 Remove-Item Env:NEXUS_GATEWAY_HMAC_SECRET -ErrorAction SilentlyContinue
 Remove-Item Env:NEXUS_GATEWAY_UPSTREAM_URL -ErrorAction SilentlyContinue
@@ -246,6 +264,8 @@ $session = [ordered]@{
     tunnelPid = $tunnel.Id
     port = $Port
     startedAt = [DateTimeOffset]::UtcNow.ToString("O")
+    meetingUrl = $meetingUrl
+    meetingExpiresAt = [long]$invite.expiresAt
 }
 [IO.File]::WriteAllText(
     $sessionPath,

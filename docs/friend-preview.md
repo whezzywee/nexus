@@ -24,10 +24,13 @@ The command:
 1. builds the meeting-only web page and gateway;
 2. creates local high-entropy gateway and host secrets under ignored
    `.runtime` storage;
-3. obtains a temporary `https://…trycloudflare.com` URL;
-4. starts the local gateway with only that public origin allowed;
-5. mints a 24-hour encrypted meeting capability locally;
-6. opens and prints the actual fragment-only meeting link.
+3. copies that meeting-only build into ignored runtime storage so later normal
+   workspace builds cannot change the live preview;
+4. obtains a temporary `https://…trycloudflare.com` URL;
+5. starts the local gateway with only that public origin allowed;
+6. mints a 24-hour encrypted meeting capability locally;
+7. saves the active link in the ignored session record, then opens and prints
+   the actual fragment-only meeting link.
 
 Send friends only the printed meeting link, never the host passphrase. The
 passphrase is also printed so the host can create another room later through
