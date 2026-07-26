@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: meeting-network-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   remote-phone:
     runs-on: ubuntu-latest
