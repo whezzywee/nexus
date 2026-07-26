@@ -1,0 +1,122 @@
+services:
+  proxy:
+    image: ${NEXUS_CADDY_IMAGE:?Pin the Caddy image tag or digest}
+    restart: unless-stopped
+    environment:
+      NEXUS_APP_DOMAIN: ${NEXUS_APP_DOMAIN:?Set the public web meeting domain}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gateway
+      - web
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/pilot/web.Dockerfile
+      args:
+        NODE_IMAGE: ${NEXUS_NODE_IMAGE:-node:22-bookworm-slim}
+        NGINX_IMAGE: ${NEXUS_NGINX_IMAGE:-nginx:alpine}
+        VITE_NEXUS_MEETING_INVITE_URL: https://${NEXUS_APP_DOMAIN}/nexus/v1/meeting-invites
+        VITE_NEXUS_MEETING_SIGNAL_URL: wss://${NEXUS_APP_DOMAIN}/nexus/v1/meetings
+        VITE_NEXUS_MEETING_HOST_SESSION_URL: https://${NEXUS_APP_DOMAIN}/nexus/v1/meeting-host-sessions
+        VITE_NEXUS_TURN_CREDENTIAL_URL: https://${NEXUS_APP_DOMAIN}/nexus/v1/turn-credentials
+        VITE_NEXUS_WEB_APP_URL: https://${NEXUS_APP_DOMAIN}/
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/pilot/gateway.Dockerfile
+      args:
+        RUST_IMAGE: ${NEXUS_RUST_IMAGE:-rust:1.89.0-bookworm}
+        RUNTIME_IMAGE: ${NEXUS_DEBIAN_IMAGE:-debian:bookworm-slim}
+    restart: unless-stopped
+    read_only: true
+    environment:
+      NEXUS_GATEWAY_BIND: 0.0.0.0:8787
+      NEXUS_GATEWAY_ID: nexus-meeting-pilot
+      NEXUS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/gateway_hmac_secret
+      NEXUS_GATEWAY_MEETING_ONLY: "true"
+      NEXUS_GATEWAY_ORIGINS: https://${NEXUS_APP_DOMAIN}
+      # Safe here because the gateway is not published and only Caddy can reach it.
+      NEXUS_GATEWAY_TRUST_PROXY_HEADERS: "true"
+      NEXUS_MEETING_HOST_SECRET_FILE: /run/secrets/meeting_host_secret
+      NEXUS_MEETING_HOST_SESSION_TTL_SECONDS: "900"
+      NEXUS_MEETING_INVITE_TTL_SECONDS: "86400"
+      NEXUS_TURN_SECRET_FILE: /run/secrets/turn_secret
+      NEXUS_TURN_URLS: turn:${NEXUS_TURN_DOMAIN}:3478?transport=udp,turn:${NEXUS_TURN_DOMAIN}:3478?transport=tcp,turns:${NEXUS_TURN_DOMAIN}:5349?transport=tcp
+      NEXUS_TURN_TTL_SECONDS: "300"
+      RUST_LOG: nexus_gateway=info,tower_http=info
+    secrets:
+      - gateway_hmac_secret
+      - meeting_host_secret
+      - turn_secret
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  coturn:
+    image: ${NEXUS_COTURN_IMAGE:?Pin an immutable Coturn image tag or digest}
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    init: true
+    environment:
+      NEXUS_TURN_REALM: ${NEXUS_TURN_DOMAIN:?Set the public TURN DNS name}
+      NEXUS_TURN_EXTERNAL_IP: ${NEXUS_TURN_EXTERNAL_IP:?Set the public relay IP}
+    entrypoint: ["/bin/sh", "/opt/nexus/render-turn-config.sh"]
+    volumes:
+      - ../turn/render-turn-config.sh:/opt/nexus/render-turn-config.sh:ro
+      - ../turn/turnserver.conf.base:/opt/nexus/turnserver.conf.base:ro
+    secrets:
+      - turn_secret
+      - tls_fullchain
+      - tls_private_key
+    tmpfs:
+      - /run/coturn:mode=0700
+      - /var/lib/coturn:mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+secrets:
+  gateway_hmac_secret:
+    file: ./secrets/gateway_hmac_secret
+  meeting_host_secret:
+    file: ./secrets/meeting_host_secret
+  turn_secret:
+    file: ./secrets/turn_secret
+  tls_fullchain:
+    file: ${NEXUS_TURN_TLS_FULLCHAIN_FILE:?Point to the TURN TLS full chain}
+  tls_private_key:
+    file: ${NEXUS_TURN_TLS_PRIVATE_KEY_FILE:?Point to the TURN TLS private key}
+
+volumes:
+  caddy_data:
+  caddy_config:

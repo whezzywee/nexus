@@ -17,3 +17,4 @@ test-results/
 *.p12
 apps/desktop/src-tauri/binaries/
 freenet/runtime/
+deploy/pilot/secrets/

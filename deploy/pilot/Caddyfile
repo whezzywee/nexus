@@ -1,0 +1,24 @@
+{$NEXUS_APP_DOMAIN} {
+	encode zstd gzip
+
+	handle /nexus/* {
+		reverse_proxy gateway:8787
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

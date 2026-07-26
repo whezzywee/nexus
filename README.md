@@ -122,6 +122,7 @@ pnpm test:freenet-two-node
 - [Gateway protocol](docs/gateway-protocol.md)
 - [WebRTC topology](docs/webrtc-topology.md)
 - [TURN operations](docs/turn-operations.md)
+- [Private meeting pilot deployment](docs/meeting-pilot-deployment.md)
 - [Real-node soak operations](docs/soak-operations.md)
 - [Phase 0 checklist](docs/phase-0-checklist.md)
 - [Phase 1 checklist](docs/phase-1-checklist.md)

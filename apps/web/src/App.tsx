@@ -53,6 +53,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { MeetingPage } from "./MeetingPage";
 import { Message } from "./Message";
 import { createWebRuntime, installWebRecovery, MODERATION_AUDIT_KEY } from "./runtime";
 
@@ -70,6 +71,7 @@ function shortParticipant(participantId: string): string {
 }
 
 export function App() {
+  const meetingOnlyMode = import.meta.env.VITE_NEXUS_MEETING_ONLY === "true";
   const [runtime, setRuntime] = useState<NexusClientRuntime | null>(null);
   const [runtimeState, setRuntimeState] = useState<"loading" | "ready" | "missing" | "failed">(
     "loading",
@@ -148,6 +150,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (meetingOnlyMode) return;
     let active = true;
     void createWebRuntime()
       .then((created) => {
@@ -836,6 +839,10 @@ export function App() {
     } catch (error) {
       setCallError(error instanceof Error ? error.message : "Meeting signaling failed.");
     }
+  }
+
+  if (meetingOnlyMode) {
+    return <MeetingPage />;
   }
 
   if (runtimeState !== "ready" || !runtime) {

@@ -280,6 +280,265 @@ body {
   }
 }
 
+.meeting-page {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto auto minmax(280px, 1fr) auto;
+  gap: 14px;
+  padding: clamp(14px, 3vw, 28px);
+  color: #f4f5f9;
+  background: radial-gradient(circle at 15% 0%, #222c4a 0, transparent 38%), #0d1018;
+}
+
+.meeting-page > header {
+  width: min(1040px, 100%);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto;
+}
+
+.meeting-page-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #10131c;
+  background: #c7d2fe;
+  font-weight: 800;
+}
+
+.meeting-page header span {
+  color: #9ea8c6;
+  font-size: 12px;
+}
+
+.meeting-page header h1 {
+  margin: 1px 0 0;
+  font-size: clamp(20px, 4vw, 30px);
+  line-height: 1.15;
+}
+
+.meeting-page button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid #3c455f;
+  border-radius: 10px;
+  color: #edf0fa;
+  background: #202638;
+  font: inherit;
+  font-weight: 650;
+}
+
+.meeting-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.meeting-page-status,
+.meeting-page-host,
+.meeting-page-stage,
+.meeting-page-controls {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+}
+
+.meeting-page-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #35405c;
+  border-radius: 12px;
+  background: #181e2d;
+}
+
+.meeting-page-status div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.meeting-page-status strong,
+.meeting-page-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-page-status span,
+.meeting-page-host > span {
+  color: #a9b1c9;
+  font-size: 12px;
+}
+
+.meeting-page-host {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #465274;
+  border-radius: 12px;
+  background: #171c29;
+}
+
+.meeting-page-host label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.meeting-page-host div {
+  display: flex;
+  gap: 8px;
+}
+
+.meeting-page-host input {
+  min-width: 0;
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid #46506a;
+  border-radius: 9px;
+  color: #f5f6fa;
+  background: #0e1119;
+  font: inherit;
+}
+
+.meeting-page-stage {
+  min-height: 280px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #272e40;
+  border-radius: 16px;
+  background: #090b10;
+}
+
+.meeting-page-tile,
+.meeting-page-empty {
+  min-height: 240px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #30384c;
+  border-radius: 12px;
+  background: #111520;
+}
+
+.meeting-page-tile video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #080a0f;
+}
+
+.meeting-page-tile > span {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  color: #f7f8fb;
+  background: #090b10cc;
+  font-size: 12px;
+}
+
+.meeting-page-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: #aab3ce;
+  text-align: center;
+}
+
+.meeting-page-empty strong {
+  color: #eef0f7;
+  font-size: 18px;
+}
+
+.meeting-page-empty span {
+  font-size: 13px;
+}
+
+.meeting-page-controls {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.meeting-page-controls button.active {
+  color: #11141d;
+  border-color: #c7d2fe;
+  background: #c7d2fe;
+}
+
+.meeting-page-controls button.join {
+  border-color: #536895;
+  background: #344467;
+}
+
+.meeting-page-controls button.leave {
+  border-color: #8c3d49;
+  background: #6d2934;
+}
+
+@media (max-width: 540px) {
+  .meeting-page {
+    grid-template-rows: auto auto minmax(260px, 1fr) auto;
+    gap: 10px;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .meeting-page > header {
+    grid-template-columns: auto 1fr;
+  }
+
+  .meeting-page > header > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .meeting-page-host div {
+    display: grid;
+  }
+
+  .meeting-page-stage {
+    min-height: 260px;
+    padding: 8px;
+  }
+
+  .meeting-page-tile,
+  .meeting-page-empty {
+    min-height: 240px;
+  }
+
+  .meeting-page-controls {
+    position: sticky;
+    bottom: 0;
+    gap: 7px;
+    padding: 8px;
+    border: 1px solid #2f374c;
+    border-radius: 13px;
+    background: #111621ed;
+    backdrop-filter: blur(16px);
+  }
+
+  .meeting-page-controls button {
+    min-width: 0;
+    flex: 1;
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+}
+
 .meeting-stage {
   margin: 10px 12px 8px;
   display: grid;

@@ -38,6 +38,21 @@ NEXUS_GATEWAY_UPSTREAM_TOKEN
 NEXUS_GATEWAY_IDEMPOTENCY_PATH
 ```
 
+For a standalone private meeting pilot, set
+`NEXUS_GATEWAY_MEETING_ONLY=true`. In this mode the contract update route is
+not registered, health reports Freenet as disabled, and the contract key,
+upstream URL/token, and idempotency journal are not required. Meeting
+invitations, encrypted WebSocket signaling, and TURN credentials remain
+available. This is an explicit reduced deployment mode, not a simulated
+Freenet connection.
+
+When the gateway is reachable only through a controlled same-stack reverse
+proxy, `NEXUS_GATEWAY_TRUST_PROXY_HEADERS=true` makes rate limiting use the
+proxy-provided `X-Forwarded-For` client address. Do not enable it on a gateway
+that clients can reach directly; otherwise callers could forge their apparent
+address. The checked-in pilot stack does not publish the gateway container and
+enables this setting behind Caddy.
+
 Optional production TURN credential configuration:
 
 ```text

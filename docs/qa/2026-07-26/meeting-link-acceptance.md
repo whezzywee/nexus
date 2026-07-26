@@ -49,11 +49,31 @@ public HTTPS gateway or production TURN relay has been deployed.
 The screenshots live in ignored local evidence storage and are not part of a
 release artifact.
 
+## Meeting-only production-path acceptance
+
+A second acceptance pass exercised the deployable meeting-only web surface
+without any Freenet runtime:
+
+- a desktop host exchanged the private host passphrase for a short-lived token,
+  minted an invitation, and produced a fragment-only link;
+- an isolated 390×844 phone profile opened the link and joined the same room;
+- the phone enabled microphone and camera after joining;
+- the desktop received one live audio and one live video track;
+- the phone viewport and document scroll width both remained 390 pixels;
+- leaving removed the remote media tile and returned the host to one
+  participant;
+- both browser error logs were empty.
+
+Evidence is under the ignored directory
+`.artifacts/qa/meeting-only-20260726/`. This proves the meeting-only browser
+path locally. It does not replace the external two-network phone and relay-only
+acceptance required after deployment.
+
 ## Remaining public-release evidence
 
 - Deploy Nexus Web and the gateway on operator-controlled HTTPS/WSS origins.
-- Replace development host authorization with an authenticated, short-lived
-  token issuer.
+- Replace the private-pilot host passphrase with account authentication before
+  allowing untrusted users to create meetings.
 - Deploy production TURN and pass relay-only calls from independent networks.
 - Test actual iOS and Android browsers, permission denial/recovery, background
   transitions, Bluetooth routing, and network changes.
