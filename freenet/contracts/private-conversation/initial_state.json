@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "conversationId": "01K10KJ6P20S58KQBV5P4E3T9D",
+  "creatorId": "0000000000000000000000000000000000000000000000000000000000000000",
+  "creatorDeviceId": "bootstrap-device",
+  "creatorEncryptionPublicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "rotations": {},
+  "transfers": {},
+  "controllerId": "0000000000000000000000000000000000000000000000000000000000000000",
+  "controllerDeviceId": "bootstrap-device",
+  "epoch": 0,
+  "devices": {
+    "bootstrap-device": {
+      "identityId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "deviceId": "bootstrap-device",
+      "encryptionPublicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "sealedKeys": {},
+  "actorSequences": {}
+}

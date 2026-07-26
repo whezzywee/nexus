@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "product": "Nexus",
+  "trustRootPublicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "releases": {},
+  "revocations": {},
+  "compatibilityPins": {}
+}

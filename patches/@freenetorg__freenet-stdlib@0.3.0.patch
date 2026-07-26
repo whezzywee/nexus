@@ -1,0 +1,31 @@
+diff --git a/dist/src/websocket-interface.js b/dist/src/websocket-interface.js
+index 70778c4ae010927cce69b813bfe7f44e2563f956..949cfdcabe4cd360db801ec1456395d7c7a63e7c 100644
+--- a/dist/src/websocket-interface.js
++++ b/dist/src/websocket-interface.js
+@@ -521,20 +521,23 @@ class FreenetWsApi {
+     }
+     put(put) {
+         return __awaiter(this, void 0, void 0, function* () {
++            const response = this.awaitResponse(this.pendingPuts);
+             this.sendRequest(new client_request_1.ClientRequestT(client_request_1.ClientRequestType.ContractRequest, new client_request_1.ContractRequestT(client_request_1.ContractRequestType.Put, put)));
+-            return this.awaitResponse(this.pendingPuts);
++            return response;
+         });
+     }
+     update(update) {
+         return __awaiter(this, void 0, void 0, function* () {
++            const response = this.awaitResponse(this.pendingUpdates);
+             this.sendRequest(new client_request_1.ClientRequestT(client_request_1.ClientRequestType.ContractRequest, new client_request_1.ContractRequestT(client_request_1.ContractRequestType.Update, update)));
+-            return this.awaitResponse(this.pendingUpdates);
++            return response;
+         });
+     }
+     get(get) {
+         return __awaiter(this, void 0, void 0, function* () {
++            const response = this.awaitResponse(this.pendingGets);
+             this.sendRequest(new client_request_1.ClientRequestT(client_request_1.ClientRequestType.ContractRequest, new client_request_1.ContractRequestT(client_request_1.ContractRequestType.Get, get)));
+-            return this.awaitResponse(this.pendingGets);
++            return response;
+         });
+     }
+     subscribe(subscribe) {

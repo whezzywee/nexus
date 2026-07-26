@@ -1,0 +1,7 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+minimumReleaseAgeExclude:
+  - lucide-react@1.27.0
+patchedDependencies:
+  '@freenetorg/freenet-stdlib@0.3.0': patches/@freenetorg__freenet-stdlib@0.3.0.patch

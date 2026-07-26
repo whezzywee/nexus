@@ -1,0 +1,52 @@
+[package]
+name = "nexus-freenet-two-node-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "=1.0.104"
+axum = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+freenet-stdlib = { version = "=0.8.4", features = ["net"] }
+freenet-test-network = { path = "../support/freenet-test-network" }
+hex = { workspace = true }
+nexus-protocol = { path = "../../packages/protocol-rs" }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tokio-tungstenite = "=0.27.0"
+tower-http = { workspace = true }
+
+[[test]]
+name = "message_roundtrip"
+path = "message_roundtrip.rs"
+
+[[test]]
+name = "community_roundtrip"
+path = "community_roundtrip.rs"
+
+[[test]]
+name = "private_conversation_roundtrip"
+path = "private_conversation_roundtrip.rs"
+
+[[test]]
+name = "attachment_roundtrip"
+path = "attachment_roundtrip.rs"
+
+[[test]]
+name = "voice_roundtrip"
+path = "voice_roundtrip.rs"
+
+[[test]]
+name = "release_roundtrip"
+path = "release_roundtrip.rs"
+
+[[bin]]
+name = "nexus-phase1-runtime"
+path = "phase1_runtime.rs"

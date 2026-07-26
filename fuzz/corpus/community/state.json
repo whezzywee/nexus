@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "communityId": "01K10KJ6P20S58KQBV5P4E3T9Z",
+  "ownerId": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ownerDeviceIds": ["device-1"],
+  "operations": {},
+  "epoch": 0,
+  "members": {},
+  "actorSequences": {}
+}

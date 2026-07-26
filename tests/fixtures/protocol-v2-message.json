@@ -1,0 +1,28 @@
+{
+  "protocolVersion": 2,
+  "operationId": "01KYF8TTFDB6NS5QR2P5TH0NAA",
+  "messageId": "01KYF8TTFDGXCC3BZPMDKV96BT",
+  "channelId": "01KYF8TTFDMQ3ZDBJ8F0Z2ETJS",
+  "authorId": "6f5fd192b4f99f5a71d8faa0e9d78704caf386aeef054544a2cb22220940734c",
+  "authorDeviceId": "01KYF8TTFB60XF97RZQ3J5BJDE",
+  "actorSequence": 1,
+  "createdAt": "2026-07-26T13:11:35.661Z",
+  "clientGeneratedOrder": "01KYF8TTFDHZAHXFTQKT0QB7CR",
+  "content": "signed content",
+  "attachmentReferences": [],
+  "editVersion": 0,
+  "deletionTombstone": false,
+  "publicKey": "B-sQddO4ZdD054i2RBHZN38ofpZSrRIjroqzzq62hSs",
+  "deviceCertificate": {
+    "version": 2,
+    "identityId": "6f5fd192b4f99f5a71d8faa0e9d78704caf386aeef054544a2cb22220940734c",
+    "deviceId": "01KYF8TTFB60XF97RZQ3J5BJDE",
+    "rootPublicKey": "FfE5VS90uB-jJZJLDk_rq5SnV4VSXqySh2v1GoXi4rw",
+    "signingPublicKey": "B-sQddO4ZdD054i2RBHZN38ofpZSrRIjroqzzq62hSs",
+    "encryptionPublicKey": "KGXFETpByKwzQ5x_Csg9Osh4qfmn50WJKxnoh85ANwE",
+    "issuanceSequence": 1,
+    "issuedAt": "2026-07-26T13:11:35.659Z",
+    "signature": "D8zsNNYCeS0J-LsHFAQhMR0ZzL11Fh3i8u-ftcZ1MMCBfOxPe33USUSOeUzk49EnFPszQmJ0veSH2Adc4feNDg"
+  },
+  "signature": "9-2PirimJ291DAkPDuPB013QNfxns2vBClF2HKB4Xx4mE5Hf0l0OIgrM1IqbGoXzzcKl783wnDy-uSIUEwUxBQ"
+}

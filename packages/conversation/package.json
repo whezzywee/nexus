@@ -1,0 +1,23 @@
+{
+  "name": "@nexus/conversation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexus/crypto": "workspace:*",
+    "@nexus/identity": "workspace:*",
+    "@nexus/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "ulid": "3.0.2",
+    "vitest": "4.1.10"
+  }
+}

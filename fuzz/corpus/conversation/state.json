@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "conversationId": "01K10KJ6P20S58KQBV5P4E3T9Z",
+  "creatorId": "0000000000000000000000000000000000000000000000000000000000000000",
+  "creatorDeviceId": "device-1",
+  "creatorEncryptionPublicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "rotations": {},
+  "epoch": 0,
+  "devices": {},
+  "sealedKeys": {},
+  "actorSequences": {}
+}

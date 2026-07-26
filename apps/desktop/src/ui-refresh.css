@@ -1,0 +1,450 @@
+/*
+ * Product UI layer. Structure remains in styles.css; this file defines the
+ * readable, restrained desktop presentation.
+ */
+/* biome-ignore-all lint/style/noDescendingSpecificity: refresh selectors intentionally follow UI reading order */
+:root {
+  --bg: #1a1b1e;
+  --rail: #111214;
+  --sidebar: #17181c;
+  --panel: #17181c;
+  --surface: #1e2025;
+  --surface-2: #27292f;
+  --line: #2b2d33;
+  --muted: #949ba4;
+  --violet: #5865f2;
+  --violet-soft: rgba(88, 101, 242, 0.14);
+  --cyan: #23a594;
+  --orange: #e39a62;
+  color: #f2f3f5;
+  background: var(--bg);
+}
+
+.desktop-shell {
+  grid-template-columns: 72px 268px minmax(480px, 1fr) 280px;
+  background: var(--bg);
+}
+
+.desktop-shell.members-hidden {
+  grid-template-columns: 72px 268px minmax(480px, 1fr);
+}
+
+.community-rail {
+  gap: 10px;
+  background: #111214;
+}
+
+.rail-brand,
+.rail-community,
+.rail-add,
+.rail-utility {
+  width: 44px;
+  height: 44px;
+}
+
+.rail-brand,
+.rail-community.active,
+.rail-community.ember,
+.rail-community.field {
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.rail-brand,
+.rail-community.active {
+  color: #fff;
+  background: #5865f2;
+}
+
+.rail-community {
+  border-radius: 50%;
+  background: #24262b;
+}
+
+.rail-community.ember {
+  color: #2c180c;
+  background: #e8a06b;
+}
+
+.rail-community.field {
+  color: #0a231f;
+  background: #58c2b2;
+}
+
+.workspace-switcher,
+.conversation-header,
+.member-panel > header {
+  height: 64px;
+}
+
+.workspace-kicker,
+.sidebar-section > header,
+.member-panel > header {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.workspace-switcher strong {
+  font-size: 14px;
+}
+
+.search-shortcut {
+  height: 36px;
+  border-radius: 6px;
+  color: #a0a5ad;
+  background: #111214;
+  font-size: 12px;
+}
+
+.sidebar-nav button,
+.channel,
+.voice-room {
+  height: 38px;
+  border-radius: 5px;
+  color: #a5aab2;
+  font-size: 13px;
+}
+
+.channel.active {
+  color: #f2f3f5;
+  background: #35373c;
+}
+
+.channel.active svg,
+.channel b {
+  color: #c5c9fa;
+}
+
+.voice-room {
+  height: 50px;
+}
+
+.voice-room strong {
+  font-size: 12px;
+}
+
+.voice-room small {
+  font-size: 10px;
+}
+
+.contribution-card {
+  padding: 11px;
+  border-radius: 7px;
+  background: #1e2025;
+}
+
+.contribution-card header span,
+.account-bar strong {
+  font-size: 11px;
+}
+
+.contribution-card header b,
+.rate-row,
+.account-bar span {
+  font-size: 10px;
+}
+
+.meter-fill {
+  background: #23a594;
+}
+
+.account-bar {
+  height: 60px;
+  background: #141518;
+}
+
+.person-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #e5a06a;
+  font-size: 11px;
+}
+
+.person-theo {
+  background: #56c4b5;
+}
+
+.person-jin {
+  background: #bc83d4;
+}
+
+.person-anya {
+  background: #79a9df;
+}
+
+.person-sam {
+  background: #cfc45d;
+}
+
+.conversation {
+  grid-template-rows: 64px minmax(0, 1fr) auto;
+  background: #1a1b1e;
+}
+
+.conversation-header {
+  background: #1a1b1e;
+  backdrop-filter: none;
+}
+
+.title-block-icon {
+  color: #b5baf6;
+}
+
+.title-block strong {
+  font-size: 14px;
+}
+
+.title-block span {
+  margin-top: 3px;
+  color: #949ba4;
+  font-size: 11px;
+}
+
+.header-search {
+  width: 190px;
+  height: 34px;
+  border-radius: 6px;
+  background: #111214;
+  font-size: 11px;
+}
+
+.desktop-search-panel {
+  background: #202126;
+}
+
+.desktop-search-panel input {
+  font-size: 13px;
+}
+
+.conversation-hero {
+  min-height: 150px;
+  padding: 42px 24px 26px;
+  gap: 16px;
+}
+
+.hero-hash {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #35373c;
+  box-shadow: none;
+}
+
+.conversation-hero p {
+  color: #949ba4;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.conversation-hero h1 {
+  margin-block: 3px 5px;
+  font-size: 26px;
+}
+
+.conversation-hero span {
+  color: #b1b5bc;
+  font-size: 13px;
+}
+
+.date-rule {
+  color: #949ba4;
+  font-size: 10px;
+}
+
+.desktop-message {
+  padding: 8px 16px 8px 20px;
+  grid-template-columns: 38px minmax(0, 1fr) 32px;
+  gap: 11px;
+}
+
+.desktop-message:hover {
+  background: #202126;
+}
+
+.desktop-message header strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.desktop-message header time,
+.desktop-message header em {
+  font-size: 10px;
+}
+
+.desktop-message header time {
+  color: #949ba4;
+}
+
+.desktop-message p {
+  margin-top: 3px;
+  color: #dbdee1;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.call-dock {
+  min-height: 44px;
+  margin: 0 14px 8px;
+  padding: 6px 8px 6px 11px;
+  border-color: #34363d;
+  border-radius: 7px;
+  background: #202126;
+}
+
+.call-dock strong {
+  font-size: 11px;
+}
+
+.call-dock span {
+  font-size: 9px;
+}
+
+.call-dock button,
+.call-dock select {
+  height: 32px;
+  border-color: #3b3d45;
+  border-radius: 5px;
+  background: #2b2d33;
+  font-size: 10px;
+}
+
+.call-dock select {
+  width: 100px;
+}
+
+.desktop-composer {
+  min-height: 52px;
+  margin: 0 16px 14px;
+  border-color: #3a3c43;
+  border-radius: 8px;
+  background: #27292f;
+  box-shadow: none;
+}
+
+.desktop-composer textarea {
+  min-height: 36px;
+  color: #f2f3f5;
+  font-size: 14px;
+}
+
+.add-attachment {
+  background: #35373c;
+}
+
+.composer-send {
+  border-radius: 6px;
+  background: #5865f2;
+}
+
+.member-panel {
+  background: #17181c;
+}
+
+.member-group {
+  margin-top: 20px;
+  font-size: 10px;
+}
+
+.member {
+  min-height: 48px;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+}
+
+.member strong {
+  font-size: 12px;
+}
+
+.member span {
+  font-size: 10px;
+}
+
+.network-card,
+.authority-card {
+  border-color: var(--line);
+  border-radius: 7px;
+  background: #1e2025;
+}
+
+.network-card-title strong {
+  font-size: 11px;
+}
+
+.network-card-title span,
+.network-card dl div,
+.network-card button,
+.peer-picker button,
+.peer-picker > span,
+.security-note {
+  font-size: 10px;
+}
+
+.network-card button {
+  height: 32px;
+  border-radius: 5px;
+  background: #292b31;
+}
+
+.network-icon {
+  border-radius: 6px;
+  color: #5ec9ba;
+  background: #263c39;
+}
+
+.reliability-tools summary,
+.moderation-audit summary {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.reliability-tools p {
+  font-size: 10px;
+}
+
+.peer-picker button.active {
+  background: #4752c4;
+}
+
+.security-note {
+  color: #a9adb5;
+  background: #1e2025;
+}
+
+.desktop-setup {
+  background: #1a1b1e;
+}
+
+.nexus-logo,
+.setup-actions button {
+  background: #5865f2;
+}
+
+@media (max-width: 1180px) {
+  .desktop-shell {
+    grid-template-columns: 68px 250px minmax(450px, 1fr);
+  }
+
+  .member-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .desktop-shell,
+  .desktop-shell.members-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation {
+    grid-template-rows: 58px minmax(0, 1fr) auto;
+  }
+
+  .conversation-hero {
+    min-height: 118px;
+    padding: 28px 16px 20px;
+  }
+
+  .desktop-message {
+    padding-inline: 12px 8px;
+  }
+}

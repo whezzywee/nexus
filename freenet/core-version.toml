@@ -1,0 +1,11 @@
+# Nexus' tested Freenet Core release pin.
+# Update only after the compatibility checks in docs/freenet-integration.md pass.
+repository = "https://github.com/freenet/freenet-core.git"
+tag = "v0.2.107"
+commit = "cfa5d0987d58e29018639d3cfdbd45fc7ca62874"
+core_crate_version = "0.2.107"
+fdev_crate_version = "0.3.269"
+rust_stdlib_version = "0.8.4"
+typescript_stdlib_version = "0.3.0"
+researched_head = "cfa5d0987d58e29018639d3cfdbd45fc7ca62874"
+researched_at = "2026-07-26"

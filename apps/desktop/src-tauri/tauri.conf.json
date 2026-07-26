@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexus",
+  "version": "0.1.0",
+  "identifier": "org.nexus.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Nexus",
+        "width": 1320,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* wss: https:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "SocialNetworking",
+    "shortDescription": "Decentralized communities and conversations.",
+    "windows": {
+      "signCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../../../scripts/sign-windows-artifact.ps1 %1"
+    }
+  }
+}

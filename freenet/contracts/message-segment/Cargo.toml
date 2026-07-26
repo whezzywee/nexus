@@ -1,0 +1,20 @@
+[package]
+name = "nexus-message-segment-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+freenet-stdlib = { workspace = true }
+nexus-protocol = { path = "../../../packages/protocol-rs" }
+serde_json = { workspace = true }
+
+[features]
+default = ["freenet-main-contract"]
+freenet-main-contract = []
+trace = ["freenet-stdlib/trace"]

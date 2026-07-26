@@ -1,0 +1,50 @@
+[package]
+name = "nexus-contract-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+nexus-protocol = { path = "../packages/protocol-rs" }
+serde_json = "=1.0.149"
+
+[[bin]]
+name = "community"
+path = "fuzz_targets/community.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "conversation"
+path = "fuzz_targets/conversation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attachment"
+path = "fuzz_targets/attachment.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "voice"
+path = "fuzz_targets/voice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "release"
+path = "fuzz_targets/release.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

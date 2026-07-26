@@ -1,0 +1,36 @@
+{
+  "name": "nexus",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @nexus/web dev",
+    "dev:desktop": "pnpm --filter @nexus/desktop tauri dev",
+    "dev:desktop-ui": "pnpm --filter @nexus/desktop dev",
+    "dev:gateway": "cargo run -p nexus-gateway",
+    "dev:phase1": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client tauri",
+    "dev:phase1:desktop-ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client desktop",
+    "dev:phase1:web": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-phase1.ps1 -Client web",
+    "build": "pnpm -r --if-present build",
+    "test": "pnpm -r --if-present test",
+    "test:freenet-two-node": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-freenet-two-node.ps1",
+    "soak:freenet": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/soak-freenet.ps1",
+    "test:turn": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-turn-acceptance.ps1",
+    "test:authenticode": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-local-authenticode.ps1",
+    "test:fuzz": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fuzz-contracts.ps1",
+    "package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

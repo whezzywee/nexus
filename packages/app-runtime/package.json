@@ -1,0 +1,30 @@
+{
+  "name": "@nexus/app-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexus/attachments": "workspace:*",
+    "@nexus/community": "workspace:*",
+    "@nexus/conversation": "workspace:*",
+    "@nexus/crypto": "workspace:*",
+    "@nexus/device": "workspace:*",
+    "@nexus/freenet-client": "workspace:*",
+    "@nexus/identity": "workspace:*",
+    "@nexus/moderation": "workspace:*",
+    "@nexus/protocol": "workspace:*",
+    "@nexus/sync-engine": "workspace:*",
+    "ulid": "3.0.2"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

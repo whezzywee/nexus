@@ -1,0 +1,33 @@
+services:
+  coturn:
+    image: ${NEXUS_COTURN_IMAGE:?Pin an immutable coturn image tag or digest}
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    init: true
+    environment:
+      NEXUS_TURN_REALM: ${NEXUS_TURN_REALM:?Set the public TURN DNS name}
+      NEXUS_TURN_EXTERNAL_IP: ${NEXUS_TURN_EXTERNAL_IP:?Set the public or public/private relay IP mapping}
+    entrypoint: ["/bin/sh", "/opt/nexus/render-turn-config.sh"]
+    volumes:
+      - ./render-turn-config.sh:/opt/nexus/render-turn-config.sh:ro
+      - ./turnserver.conf.base:/opt/nexus/turnserver.conf.base:ro
+    secrets:
+      - turn_secret
+      - tls_fullchain
+      - tls_private_key
+    tmpfs:
+      - /run/coturn:mode=0700
+      - /var/lib/coturn:mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+secrets:
+  turn_secret:
+    file: ${NEXUS_TURN_SECRET_FILE:?Point to a root-readable TURN secret file}
+  tls_fullchain:
+    file: ${NEXUS_TURN_TLS_FULLCHAIN_FILE:?Point to the TURN TLS full chain}
+  tls_private_key:
+    file: ${NEXUS_TURN_TLS_PRIVATE_KEY_FILE:?Point to the TURN TLS private key}

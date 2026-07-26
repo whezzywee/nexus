@@ -1,0 +1,22 @@
+{
+  "name": "@nexus/test-utilities",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexus/attachments": "workspace:*",
+    "@nexus/freenet-client": "workspace:*",
+    "@nexus/identity": "workspace:*",
+    "@nexus/sync-engine": "workspace:*",
+    "ulid": "3.0.2"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

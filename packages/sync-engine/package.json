@@ -1,0 +1,24 @@
+{
+  "name": "@nexus/sync-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nexus/conversation": "workspace:*",
+    "@nexus/freenet-client": "workspace:*",
+    "@nexus/identity": "workspace:*",
+    "@nexus/protocol": "workspace:*",
+    "ulid": "3.0.2"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

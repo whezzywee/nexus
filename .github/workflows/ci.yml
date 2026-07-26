@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: Seconds per fuzz target
+        required: true
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  authority-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [community, conversation, attachment, voice, release]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: nightly-2026-07-20
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+      - name: Fuzz ${{ matrix.target }} decoders, deltas, and merges
+        shell: bash
+        env:
+          DISPATCH_SECONDS: ${{ inputs.fuzz_seconds }}
+        run: |
+          set -o pipefail
+          mkdir -p fuzz/logs
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            fuzz_seconds=1800
+          elif [[ -n "${DISPATCH_SECONDS}" ]]; then
+            if ! [[ "${DISPATCH_SECONDS}" =~ ^[0-9]+$ ]] ||
+              (( DISPATCH_SECONDS < 1 || DISPATCH_SECONDS > 1800 )); then
+              echo "fuzz_seconds must be an integer from 1 through 1800" >&2
+              exit 2
+            fi
+            fuzz_seconds="${DISPATCH_SECONDS}"
+          else
+            fuzz_seconds=60
+          fi
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "target=${{ matrix.target }}"
+            echo "sanitizer=address"
+            echo "max_total_time=${fuzz_seconds}"
+            echo "event=${GITHUB_EVENT_NAME}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "runner_os=${RUNNER_OS}"
+            rustc +nightly-2026-07-20 -Vv
+            cargo fuzz --version
+          } > fuzz/logs/${{ matrix.target }}-metadata.txt
+          cargo +nightly-2026-07-20 fuzz run ${{ matrix.target }} \
+            --fuzz-dir fuzz \
+            --sanitizer address \
+            -- \
+            -runs=1000000 \
+            -max_total_time="${fuzz_seconds}" \
+            -timeout=10 \
+            2>&1 | tee fuzz/logs/${{ matrix.target }}.log
+          echo "result=pass" >> fuzz/logs/${{ matrix.target }}-metadata.txt
+      - name: Preserve fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            fuzz/logs/${{ matrix.target }}.log
+            fuzz/logs/${{ matrix.target }}-metadata.txt
+            fuzz/artifacts/${{ matrix.target }}/
+
+  quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.89.0
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level moderate
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+      - name: Build contracts twice and compare
+        shell: pwsh
+        run: |
+          $packages = @(
+            "nexus-message-segment-contract",
+            "nexus-community-membership-contract",
+            "nexus-private-conversation-contract",
+            "nexus-attachment-index-contract",
+            "nexus-attachment-chunk-contract",
+            "nexus-voice-session-contract",
+            "nexus-release-manifest-contract"
+          )
+          cargo build --release --target wasm32-unknown-unknown $(foreach ($package in $packages) { "-p"; $package })
+          New-Item -ItemType Directory -Path reproducibility\first -Force | Out-Null
+          Copy-Item target\wasm32-unknown-unknown\release\nexus_*_contract.wasm reproducibility\first
+          cargo clean -p nexus-message-segment-contract -p nexus-community-membership-contract -p nexus-private-conversation-contract -p nexus-attachment-index-contract -p nexus-attachment-chunk-contract -p nexus-voice-session-contract -p nexus-release-manifest-contract
+          cargo build --release --target wasm32-unknown-unknown $(foreach ($package in $packages) { "-p"; $package })
+          New-Item -ItemType Directory -Path reproducibility\second -Force | Out-Null
+          Copy-Item target\wasm32-unknown-unknown\release\nexus_*_contract.wasm reproducibility\second
+          $first = Get-ChildItem reproducibility\first -File | Sort-Object Name
+          foreach ($artifact in $first) {
+            $second = Join-Path reproducibility\second $artifact.Name
+            if ((Get-FileHash $artifact.FullName).Hash -ne (Get-FileHash $second).Hash) {
+              throw "Contract build is not reproducible: $($artifact.Name)"
+            }
+          }
+          Get-ChildItem reproducibility\second -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_.Path))" } |
+            Set-Content reproducibility\SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducible-contracts
+          path: |
+            reproducibility/second/*.wasm
+            reproducibility/SHA256SUMS.txt

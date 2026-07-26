@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "callId": "01K10KJ6P20S58KQBV5P4E3TE1",
+  "callEpoch": 1,
+  "participants": {
+    "bootstrap-device-a": {
+      "identityId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "deviceId": "bootstrap-device-a"
+    },
+    "bootstrap-device-b": {
+      "identityId": "1111111111111111111111111111111111111111111111111111111111111111",
+      "deviceId": "bootstrap-device-b"
+    }
+  },
+  "signals": {},
+  "senderSequences": {}
+}
