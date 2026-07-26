@@ -67,7 +67,6 @@ jobs:
             --fuzz-dir fuzz \
             --sanitizer address \
             -- \
-            -runs=1000000 \
             -max_total_time="${fuzz_seconds}" \
             -timeout=10 \
             2>&1 | tee fuzz/logs/${{ matrix.target }}.log
