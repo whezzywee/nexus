@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMeetingUrl,
+  createMeetingHostSession,
   createMeetingInvite,
   MEETING_FRAGMENT_KEY,
   type MeetingInvite,
@@ -76,6 +77,38 @@ describe("meeting links", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ authorization: "Bearer host-token" }),
+      }),
+    );
+    fetcher.mockRestore();
+  });
+
+  it("exchanges a host passphrase for a short-lived meeting authorization", async () => {
+    const passphrase = "host-passphrase-that-is-long-enough-123";
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: invite.accessToken,
+          expiresAt: now + 15 * 60_000,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      createMeetingHostSession(
+        new URL("https://gateway.example/nexus/v1/meeting-host-sessions"),
+        passphrase,
+        now,
+      ),
+    ).resolves.toEqual({
+      authorization: `Bearer ${invite.accessToken}`,
+      expiresAt: now + 15 * 60_000,
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({
+        method: "POST",
+        headers: { authorization: `Nexus-Host ${passphrase}` },
       }),
     );
     fetcher.mockRestore();

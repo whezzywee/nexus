@@ -19,6 +19,16 @@ interface MeetingInviteResponse {
   expiresAt: number;
 }
 
+interface MeetingHostSessionResponse {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface MeetingHostSession {
+  authorization: string;
+  expiresAt: number;
+}
+
 const roomIdPattern = /^[A-Za-z0-9_-]{8,64}$/;
 const accessTokenPattern = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const roomKeyPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -119,6 +129,44 @@ export async function createMeetingInvite(
     },
     now,
   );
+}
+
+export async function createMeetingHostSession(
+  endpoint: URL,
+  passphrase: string,
+  now = Date.now(),
+): Promise<MeetingHostSession> {
+  requireGatewayEndpoint(endpoint);
+  const secret = passphrase.trim();
+  if (secret.length < 32 || secret.length > 256) {
+    throw new Error("The host passphrase must contain between 32 and 256 characters.");
+  }
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Nexus-Host ${secret}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 401
+        ? "The host passphrase is incorrect."
+        : `Meeting host access failed (${response.status}).`,
+    );
+  }
+  const payload = (await response.json()) as MeetingHostSessionResponse;
+  if (
+    !accessTokenPattern.test(payload.accessToken) ||
+    !Number.isSafeInteger(payload.expiresAt) ||
+    payload.expiresAt <= now + 30_000 ||
+    payload.expiresAt > now + 60 * 60_000
+  ) {
+    throw new Error("The meeting host session is invalid or not short-lived.");
+  }
+  return {
+    authorization: `Bearer ${payload.accessToken}`,
+    expiresAt: payload.expiresAt,
+  };
 }
 
 function encodeInvite(invite: MeetingInvite): string {

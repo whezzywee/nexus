@@ -49,6 +49,8 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const DEFAULT_MEETING_INVITE_TTL_SECONDS: u64 = 24 * 60 * 60;
 const MAX_MEETING_INVITE_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+const DEFAULT_MEETING_HOST_SESSION_TTL_SECONDS: u64 = 15 * 60;
+const MAX_MEETING_HOST_SESSION_TTL_SECONDS: u64 = 60 * 60;
 const MAX_MEETING_PARTICIPANTS: usize = 6;
 const MAX_MEETING_SIGNAL_BYTES: usize = 64 * 1024;
 const MEETING_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -79,6 +81,8 @@ struct GatewayConfig {
     ip_burst: f64,
     turn: Option<TurnConfig>,
     meeting_invite_ttl_seconds: u64,
+    meeting_host_secret: Option<Arc<[u8]>>,
+    meeting_host_session_ttl_seconds: u64,
 }
 
 impl GatewayConfig {
@@ -130,6 +134,10 @@ impl GatewayConfig {
         if !bind.ip().is_loopback() && env::var_os("NEXUS_GATEWAY_IDEMPOTENCY_PATH").is_none() {
             return Err("A non-loopback gateway requires NEXUS_GATEWAY_IDEMPOTENCY_PATH".into());
         }
+        let meeting_host_secret = optional_secret(
+            "NEXUS_MEETING_HOST_SECRET",
+            "NEXUS_MEETING_HOST_SECRET_FILE",
+        )?;
         Ok(Self {
             gateway_id: env::var("NEXUS_GATEWAY_ID").unwrap_or_else(|_| "nexus-gateway".into()),
             bind,
@@ -150,8 +158,41 @@ impl GatewayConfig {
                 5 * 60,
                 MAX_MEETING_INVITE_TTL_SECONDS,
             )?,
+            meeting_host_secret,
+            meeting_host_session_ttl_seconds: bounded_u64(
+                "NEXUS_MEETING_HOST_SESSION_TTL_SECONDS",
+                DEFAULT_MEETING_HOST_SESSION_TTL_SECONDS,
+                5 * 60,
+                MAX_MEETING_HOST_SESSION_TTL_SECONDS,
+            )?,
         })
     }
+}
+
+fn optional_secret(env_name: &str, file_name: &str) -> Result<Option<Arc<[u8]>>, String> {
+    let direct = env::var(env_name).ok();
+    let file = env::var_os(file_name);
+    if direct.is_some() && file.is_some() {
+        return Err(format!("{env_name} and {file_name} cannot both be set"));
+    }
+    let secret = match (direct, file) {
+        (Some(value), None) => Some(value),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(&path)
+                .map_err(|error| format!("Could not read {file_name}: {error}"))?,
+        ),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    secret
+        .map(|value| {
+            let trimmed = value.trim();
+            if !(32..=256).contains(&trimmed.len()) {
+                return Err(format!("{env_name} must contain between 32 and 256 bytes"));
+            }
+            Ok(Arc::from(trimmed.as_bytes()))
+        })
+        .transpose()
 }
 
 fn turn_config_from_env() -> Result<Option<TurnConfig>, String> {
@@ -339,6 +380,13 @@ struct MeetingInviteRequest {
 struct MeetingInviteResponse {
     room_id: String,
     room_name: String,
+    access_token: String,
+    expires_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingHostSessionResponse {
     access_token: String,
     expires_at: u64,
 }
@@ -556,6 +604,83 @@ async fn issue_meeting_invite(
             expires_at: expiry.saturating_mul(1000),
         }),
     ))
+}
+
+async fn issue_meeting_host_session(
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<MeetingHostSessionResponse>), ApiError> {
+    enforce_rate_limits(
+        &state,
+        &format!("meeting-host-session:{}", remote.ip()),
+        remote.ip(),
+    )?;
+    let configured_secret = state.config.meeting_host_secret.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "host_sessions_unavailable",
+            "Meeting host sessions are not configured",
+        )
+    })?;
+    let supplied_secret = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Nexus-Host "))
+        .filter(|value| (32..=256).contains(&value.len()))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid_host_secret",
+                "The meeting host passphrase is invalid",
+            )
+        })?;
+    if !meeting_host_secret_matches(configured_secret, supplied_secret.as_bytes()) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_host_secret",
+            "The meeting host passphrase is invalid",
+        ));
+    }
+    let now = unix_time();
+    let expiry = now
+        .checked_add(state.config.meeting_host_session_ttl_seconds)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "clock_error",
+                "Meeting host session expiry overflowed",
+            )
+        })?;
+    let claims = AccessClaims {
+        sub: format!("meeting-host:{}", request_id()),
+        exp: expiry,
+        permissions: vec!["meeting".into()],
+        contracts: Vec::new(),
+    };
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        response_headers,
+        Json(MeetingHostSessionResponse {
+            access_token: sign_access_token(&claims, &state.config.hmac_secret)?,
+            expires_at: expiry.saturating_mul(1000),
+        }),
+    ))
+}
+
+fn meeting_host_secret_matches(expected: &[u8], supplied: &[u8]) -> bool {
+    const CONTEXT: &[u8] = b"nexus:meeting-host-session:v1";
+    let Ok(mut supplied_mac) = HmacSha256::new_from_slice(supplied) else {
+        return false;
+    };
+    supplied_mac.update(CONTEXT);
+    let supplied_tag = supplied_mac.finalize().into_bytes();
+    let Ok(mut expected_mac) = HmacSha256::new_from_slice(expected) else {
+        return false;
+    };
+    expected_mac.update(CONTEXT);
+    expected_mac.verify_slice(&supplied_tag).is_ok()
 }
 
 async fn meeting_websocket(
@@ -1350,6 +1475,10 @@ fn router(state: Arc<GatewayState>) -> Router {
         .route("/nexus/v1/health", get(health))
         .route("/nexus/v1/contracts/{key}/updates", post(submit_update))
         .route("/nexus/v1/turn-credentials", post(issue_turn_credential))
+        .route(
+            "/nexus/v1/meeting-host-sessions",
+            post(issue_meeting_host_session),
+        )
         .route("/nexus/v1/meeting-invites", post(issue_meeting_invite))
         .route("/nexus/v1/meetings/{room_id}", get(meeting_websocket))
         .layer(SetResponseHeaderLayer::overriding(
@@ -1492,6 +1621,17 @@ mod tests {
         assert!(!valid_participant_id("bad id"));
         assert!(valid_meeting_ciphertext("abcdefghijklmnop"));
         assert!(!valid_meeting_ciphertext("not+base64url!!!!"));
+    }
+
+    #[test]
+    fn meeting_host_secret_comparison_is_exact() {
+        let expected = b"host-passphrase-that-is-long-enough-123";
+        assert!(meeting_host_secret_matches(expected, expected));
+        assert!(!meeting_host_secret_matches(
+            expected,
+            b"host-passphrase-that-is-long-enough-124"
+        ));
+        assert!(!meeting_host_secret_matches(expected, b"short"));
     }
 
     #[test]

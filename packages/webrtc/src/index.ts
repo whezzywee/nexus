@@ -3,9 +3,11 @@ import { concatBytes, type DeviceCertificate } from "@nexus/protocol";
 
 export {
   buildMeetingUrl,
+  createMeetingHostSession,
   createMeetingInvite,
   MEETING_FRAGMENT_KEY,
   MEETING_LINK_VERSION,
+  type MeetingHostSession,
   type MeetingInvite,
   parseMeetingUrl,
   validateMeetingInvite,

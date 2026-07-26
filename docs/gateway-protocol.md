@@ -62,6 +62,7 @@ The implemented HTTP surface is:
 GET  /nexus/v1/health
 POST /nexus/v1/contracts/{key}/updates
 POST /nexus/v1/turn-credentials
+POST /nexus/v1/meeting-host-sessions
 POST /nexus/v1/meeting-invites
 GET  /nexus/v1/meetings/{room-id}  (WebSocket upgrade)
 ```
@@ -107,6 +108,18 @@ only URL-safe encrypted signal payloads to an online recipient. Offers,
 answers, and ICE candidates are AES-256-GCM encrypted in the browser with a
 room key held only in the URL fragment. The capability and encryption key are
 never placed in the WebSocket URL.
+
+For a small private pilot, operators may configure
+`NEXUS_MEETING_HOST_SECRET_FILE` and expose
+`POST /meeting-host-sessions`. A host sends the private 32–256 character
+passphrase using the `Nexus-Host` authorization scheme and receives a
+short-lived token containing only the `meeting` permission. The endpoint is
+IP/subject rate-limited, performs an exact constant-time comparison, returns
+`Cache-Control: no-store`, and is disabled when no host secret is configured.
+The web client keeps the resulting token in memory only. The passphrase is
+never included in an invitation and is not an identity system; replace this
+pilot boundary with normal account authentication before opening hosting to
+untrusted users.
 
 ## Subscription stream
 

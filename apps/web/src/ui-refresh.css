@@ -228,6 +228,58 @@ body {
   line-height: 1.35;
 }
 
+.meeting-host-access {
+  display: grid;
+  gap: 6px;
+  margin: 8px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #3c4666;
+  border-radius: 8px;
+  background: #181d2a;
+}
+
+.meeting-host-access label {
+  color: #e4e7f5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.meeting-host-access div {
+  display: flex;
+  gap: 8px;
+}
+
+.meeting-host-access input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #4a526a;
+  border-radius: 6px;
+  color: #f2f3f7;
+  background: #10131b;
+}
+
+.meeting-host-access button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #111521;
+  background: #c7d2fe;
+  font-weight: 650;
+}
+
+.meeting-host-access span {
+  color: #9da6c4;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 540px) {
+  .meeting-host-access div {
+    display: grid;
+  }
+}
+
 .meeting-stage {
   margin: 10px 12px 8px;
   display: grid;

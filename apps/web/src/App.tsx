@@ -21,8 +21,10 @@ import type { DisplayMessage } from "@nexus/protocol";
 import type { ChatSnapshot } from "@nexus/sync-engine";
 import {
   buildMeetingUrl,
+  createMeetingHostSession,
   createMeetingInvite,
   fetchTurnCredential,
+  type MeetingHostSession,
   type MeetingInvite,
   type MeetingSignal,
   MeetingSignalingClient,
@@ -98,6 +100,7 @@ export function App() {
   const callSignaling = useRef<MeetingSignalingClient | null>(null);
   const pendingCallIce = useRef(new Map<string, RTCIceCandidateInit[]>());
   const callRemoteDescriptions = useRef(new Set<string>());
+  const meetingHostSession = useRef<MeetingHostSession | null>(null);
   const [callJoined, setCallJoined] = useState(false);
   const [microphoneActive, setMicrophoneActive] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
@@ -109,6 +112,9 @@ export function App() {
   const [meetingInvite, setMeetingInvite] = useState<MeetingInvite | null>(null);
   const [meetingLinkError, setMeetingLinkError] = useState<string | null>(null);
   const [meetingShareStatus, setMeetingShareStatus] = useState<string | null>(null);
+  const [meetingHostAccessOpen, setMeetingHostAccessOpen] = useState(false);
+  const [meetingHostPassphrase, setMeetingHostPassphrase] = useState("");
+  const [meetingHostBusy, setMeetingHostBusy] = useState(false);
   const [mediaDevices, setMediaDevices] = useState<MediaDeviceInfo[]>([]);
   const [microphoneId, setMicrophoneId] = useState("");
   const [cameraId, setCameraId] = useState("");
@@ -522,7 +528,23 @@ export function App() {
     setOnline(next);
   }
 
-  async function ensureMeetingInvite(): Promise<MeetingInvite> {
+  function meetingHostAuthorization(): string {
+    const configured = (
+      import.meta.env.VITE_NEXUS_MEETING_HOST_AUTHORIZATION ||
+      (import.meta.env.VITE_NEXUS_AUTH_TOKEN
+        ? `Bearer ${import.meta.env.VITE_NEXUS_AUTH_TOKEN}`
+        : "")
+    ).trim();
+    if (configured) return configured;
+    const session = meetingHostSession.current;
+    if (session && session.expiresAt > Date.now() + 30_000) return session.authorization;
+    meetingHostSession.current = null;
+    return "";
+  }
+
+  async function ensureMeetingInvite(
+    authorization = meetingHostAuthorization(),
+  ): Promise<MeetingInvite> {
     if (meetingInvite) return meetingInvite;
     const activeRuntime = runtime;
     if (!activeRuntime) throw new Error("The meeting room is still loading.");
@@ -530,13 +552,7 @@ export function App() {
     if (!inviteEndpoint) {
       throw new Error("Meeting invitations are not configured on this client.");
     }
-    const hostAuthorization = (
-      import.meta.env.VITE_NEXUS_MEETING_HOST_AUTHORIZATION ||
-      (import.meta.env.VITE_NEXUS_AUTH_TOKEN
-        ? `Bearer ${import.meta.env.VITE_NEXUS_AUTH_TOKEN}`
-        : "")
-    ).trim();
-    const invite = await createMeetingInvite(new URL(inviteEndpoint), hostAuthorization, {
+    const invite = await createMeetingInvite(new URL(inviteEndpoint), authorization, {
       roomId: activeRuntime.channelId,
       roomName: "The observatory",
     });
@@ -650,6 +666,15 @@ export function App() {
   }
 
   async function shareMeeting() {
+    const hostSessionEndpoint = import.meta.env.VITE_NEXUS_MEETING_HOST_SESSION_URL as
+      | string
+      | undefined;
+    if (!meetingInvite && !meetingHostAuthorization() && hostSessionEndpoint) {
+      setMeetingHostAccessOpen(true);
+      setMeetingLinkError(null);
+      setMeetingShareStatus("Enter your private host passphrase to create a meeting link.");
+      return;
+    }
     try {
       const invite = await ensureMeetingInvite();
       const publicAppUrl =
@@ -672,6 +697,26 @@ export function App() {
       setMeetingLinkError(
         error instanceof Error ? error.message : "The meeting link could not be shared.",
       );
+    }
+  }
+
+  async function unlockMeetingHost(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const endpoint = import.meta.env.VITE_NEXUS_MEETING_HOST_SESSION_URL as string | undefined;
+    if (!endpoint || meetingHostBusy) return;
+    setMeetingHostBusy(true);
+    try {
+      const session = await createMeetingHostSession(new URL(endpoint), meetingHostPassphrase);
+      meetingHostSession.current = session;
+      setMeetingHostPassphrase("");
+      await ensureMeetingInvite(session.authorization);
+      setMeetingHostAccessOpen(false);
+      setMeetingLinkError(null);
+      setMeetingShareStatus("Host access unlocked. Tap Invite to share the link.");
+    } catch (error) {
+      setMeetingLinkError(error instanceof Error ? error.message : "Host access failed.");
+    } finally {
+      setMeetingHostBusy(false);
     }
   }
 
@@ -927,7 +972,7 @@ export function App() {
           </div>
         </section>
 
-        {(meetingInvite || meetingLinkError || meetingShareStatus) && (
+        {(meetingInvite || meetingLinkError || meetingShareStatus || meetingHostAccessOpen) && (
           <section className="meeting-link-status" aria-live="polite">
             <Share2 size={17} aria-hidden="true" />
             <div>
@@ -943,6 +988,28 @@ export function App() {
               </span>
             </div>
           </section>
+        )}
+
+        {meetingHostAccessOpen && (
+          <form className="meeting-host-access" onSubmit={(event) => void unlockMeetingHost(event)}>
+            <label htmlFor="meeting-host-passphrase">Private host passphrase</label>
+            <div>
+              <input
+                id="meeting-host-passphrase"
+                type="password"
+                autoComplete="current-password"
+                value={meetingHostPassphrase}
+                onChange={(event) => setMeetingHostPassphrase(event.target.value)}
+                minLength={32}
+                maxLength={256}
+                required
+              />
+              <button type="submit" disabled={meetingHostBusy}>
+                {meetingHostBusy ? "Unlocking…" : "Unlock invites"}
+              </button>
+            </div>
+            <span>This stays in this tab and is never included in links you share.</span>
+          </form>
         )}
 
         {searchOpen && (
