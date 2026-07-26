@@ -47,6 +47,12 @@ pilot, soak, signing, and independent-review evidence remain open.
 
 ## Release experience
 
+- [x] Add gateway-minted, expiring meeting links that open on phone layouts and
+      connect small-room peers through encrypted offer/answer/ICE signaling.
+      Local two-profile acceptance connected a 390×844 guest to a desktop host,
+      delivered live fake-device audio and video tracks after post-join
+      renegotiation, and verified leave cleanup. Public HTTPS/WSS and relay-only
+      deployment evidence remain part of the open production gates below.
 - [ ] Complete manual keyboard, screen-reader, contrast, zoom, and reduced-motion
       review on the supported client matrix.
       Automated WCAG A/AA scans, keyboard traversal, and 200%-equivalent reflow

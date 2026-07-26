@@ -8,6 +8,11 @@ publishing a raw Freenet node administration surface.
 The browser speaks HTTPS and secure WebSocket to the gateway. The gateway uses
 the pinned Freenet client API on a private loopback or private network.
 
+When `NEXUS_WEB_STATIC_DIR` points to a built Nexus Web directory, the gateway
+also serves those static files as a fallback. This is used by the temporary
+single-origin friend preview; it does not change the gateway's authority or
+enable a Freenet simulator.
+
 ## Implemented authorization boundary
 
 The current update endpoint requires a bearer token shaped as
@@ -38,6 +43,21 @@ NEXUS_GATEWAY_UPSTREAM_TOKEN
 NEXUS_GATEWAY_IDEMPOTENCY_PATH
 ```
 
+For a standalone private meeting pilot, set
+`NEXUS_GATEWAY_MEETING_ONLY=true`. In this mode the contract update route is
+not registered, health reports Freenet as disabled, and the contract key,
+upstream URL/token, and idempotency journal are not required. Meeting
+invitations, encrypted WebSocket signaling, and TURN credentials remain
+available. This is an explicit reduced deployment mode, not a simulated
+Freenet connection.
+
+When the gateway is reachable only through a controlled same-stack reverse
+proxy, `NEXUS_GATEWAY_TRUST_PROXY_HEADERS=true` makes rate limiting use the
+proxy-provided `X-Forwarded-For` client address. Do not enable it on a gateway
+that clients can reach directly; otherwise callers could forge their apparent
+address. The checked-in pilot stack does not publish the gateway container and
+enables this setting behind Caddy.
+
 Optional production TURN credential configuration:
 
 ```text
@@ -62,6 +82,9 @@ The implemented HTTP surface is:
 GET  /nexus/v1/health
 POST /nexus/v1/contracts/{key}/updates
 POST /nexus/v1/turn-credentials
+POST /nexus/v1/meeting-host-sessions
+POST /nexus/v1/meeting-invites
+GET  /nexus/v1/meetings/{room-id}  (WebSocket upgrade)
 ```
 
 `POST /updates` requires:
@@ -88,6 +111,35 @@ returns the original result; reusing an ID with different bytes is rejected.
 TURN REST username/password plus configured `turn:`/`turns:` URLs. Responses
 are never cacheable. The shared relay secret remains operator-only; see
 [Production TURN operations](turn-operations.md).
+
+`POST /meeting-invites` requires the `meeting` permission and accepts a bounded
+URL-safe room ID plus a human-readable room name. It returns a gateway-signed,
+time-limited capability with `meeting` and `turn` permissions. The web client
+places that capability inside the URL fragment, so normal page requests,
+referrer headers, reverse-proxy request targets, and static-host logs do not
+receive it. The link is still a bearer capability: anyone who receives it can
+join until it expires, so clients must not upload it to analytics or diagnostics.
+
+`GET /meetings/{room-id}` upgrades to a bounded small-room WebSocket. The first
+client frame carries the invitation capability and a fresh participant/device
+ID; the capability must be unexpired, have `meeting` permission, and be bound
+to the room in the path. The gateway caps rooms at six participants and relays
+only URL-safe encrypted signal payloads to an online recipient. Offers,
+answers, and ICE candidates are AES-256-GCM encrypted in the browser with a
+room key held only in the URL fragment. The capability and encryption key are
+never placed in the WebSocket URL.
+
+For a small private pilot, operators may configure
+`NEXUS_MEETING_HOST_SECRET_FILE` and expose
+`POST /meeting-host-sessions`. A host sends the private 32–256 character
+passphrase using the `Nexus-Host` authorization scheme and receives a
+short-lived token containing only the `meeting` permission. The endpoint is
+IP/subject rate-limited, performs an exact constant-time comparison, returns
+`Cache-Control: no-store`, and is disabled when no host secret is configured.
+The web client keeps the resulting token in memory only. The passphrase is
+never included in an invitation and is not an identity system; replace this
+pilot boundary with normal account authentication before opening hosting to
+untrusted users.
 
 ## Subscription stream
 

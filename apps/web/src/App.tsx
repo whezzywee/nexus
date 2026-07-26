@@ -19,7 +19,19 @@ import {
 } from "@nexus/client-react";
 import type { DisplayMessage } from "@nexus/protocol";
 import type { ChatSnapshot } from "@nexus/sync-engine";
-import { fetchTurnCredential, MeshMediaRouter, turnIceServer } from "@nexus/webrtc";
+import {
+  buildMeetingUrl,
+  createMeetingHostSession,
+  createMeetingInvite,
+  fetchTurnCredential,
+  type MeetingHostSession,
+  type MeetingInvite,
+  type MeetingSignal,
+  MeetingSignalingClient,
+  MeshMediaRouter,
+  parseMeetingUrl,
+  turnIceServer,
+} from "@nexus/webrtc";
 import {
   Bell,
   Camera,
@@ -35,11 +47,13 @@ import {
   PhoneOff,
   Search,
   Send,
+  Share2,
   Signal,
   Users,
   WifiOff,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { MeetingPage } from "./MeetingPage";
 import { Message } from "./Message";
 import { createWebRuntime, installWebRecovery, MODERATION_AUDIT_KEY } from "./runtime";
 
@@ -52,7 +66,12 @@ function shortIdentity(identityId: string): string {
   return identityId.slice(0, 7);
 }
 
+function shortParticipant(participantId: string): string {
+  return participantId.slice(-6);
+}
+
 export function App() {
+  const meetingOnlyMode = import.meta.env.VITE_NEXUS_MEETING_ONLY === "true";
   const [runtime, setRuntime] = useState<NexusClientRuntime | null>(null);
   const [runtimeState, setRuntimeState] = useState<"loading" | "ready" | "missing" | "failed">(
     "loading",
@@ -80,12 +99,24 @@ export function App() {
   const searchInput = useRef<HTMLInputElement>(null);
   const knownAcceptedMessages = useRef<Set<string> | null>(null);
   const callRouter = useRef<MeshMediaRouter | null>(null);
+  const callSignaling = useRef<MeetingSignalingClient | null>(null);
+  const pendingCallIce = useRef(new Map<string, RTCIceCandidateInit[]>());
+  const callRemoteDescriptions = useRef(new Set<string>());
+  const meetingHostSession = useRef<MeetingHostSession | null>(null);
   const [callJoined, setCallJoined] = useState(false);
   const [microphoneActive, setMicrophoneActive] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [screenActive, setScreenActive] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [callRoute, setCallRoute] = useState("Waiting for peers");
+  const [callParticipants, setCallParticipants] = useState<string[]>([]);
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [meetingInvite, setMeetingInvite] = useState<MeetingInvite | null>(null);
+  const [meetingLinkError, setMeetingLinkError] = useState<string | null>(null);
+  const [meetingShareStatus, setMeetingShareStatus] = useState<string | null>(null);
+  const [meetingHostAccessOpen, setMeetingHostAccessOpen] = useState(false);
+  const [meetingHostPassphrase, setMeetingHostPassphrase] = useState("");
+  const [meetingHostBusy, setMeetingHostBusy] = useState(false);
   const [mediaDevices, setMediaDevices] = useState<MediaDeviceInfo[]>([]);
   const [microphoneId, setMicrophoneId] = useState("");
   const [cameraId, setCameraId] = useState("");
@@ -109,6 +140,17 @@ export function App() {
   });
 
   useEffect(() => {
+    try {
+      setMeetingInvite(parseMeetingUrl(new URL(window.location.href)));
+    } catch (error) {
+      setMeetingLinkError(
+        error instanceof Error ? error.message : "This meeting link could not be opened.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (meetingOnlyMode) return;
     let active = true;
     void createWebRuntime()
       .then((created) => {
@@ -489,37 +531,196 @@ export function App() {
     setOnline(next);
   }
 
+  function meetingHostAuthorization(): string {
+    const configured = (
+      import.meta.env.VITE_NEXUS_MEETING_HOST_AUTHORIZATION ||
+      (import.meta.env.VITE_NEXUS_AUTH_TOKEN
+        ? `Bearer ${import.meta.env.VITE_NEXUS_AUTH_TOKEN}`
+        : "")
+    ).trim();
+    if (configured) return configured;
+    const session = meetingHostSession.current;
+    if (session && session.expiresAt > Date.now() + 30_000) return session.authorization;
+    meetingHostSession.current = null;
+    return "";
+  }
+
+  async function ensureMeetingInvite(
+    authorization = meetingHostAuthorization(),
+  ): Promise<MeetingInvite> {
+    if (meetingInvite) return meetingInvite;
+    const activeRuntime = runtime;
+    if (!activeRuntime) throw new Error("The meeting room is still loading.");
+    const inviteEndpoint = import.meta.env.VITE_NEXUS_MEETING_INVITE_URL as string | undefined;
+    if (!inviteEndpoint) {
+      throw new Error("Meeting invitations are not configured on this client.");
+    }
+    const invite = await createMeetingInvite(new URL(inviteEndpoint), authorization, {
+      roomId: activeRuntime.channelId,
+      roomName: "The observatory",
+    });
+    setMeetingInvite(invite);
+    return invite;
+  }
+
   async function joinCall() {
     const activeRuntime = runtime;
     const identity = activeRuntime?.identities[activePeer] ?? activeRuntime?.identities[0];
     if (callJoined || !activeRuntime || !identity) return;
-    const router = new MeshMediaRouter({
-      onIceCandidate() {},
-      onRemoteTrack() {},
-      onConnectionState() {},
+    const signalingEndpoint = import.meta.env.VITE_NEXUS_MEETING_SIGNAL_URL as string | undefined;
+    const activeInvite =
+      meetingInvite ?? (signalingEndpoint ? await ensureMeetingInvite() : undefined);
+    let router: MeshMediaRouter;
+    router = new MeshMediaRouter({
+      onIceCandidate(signal) {
+        void callSignaling.current
+          ?.sendSignal(signal.peerId, { type: "ice", candidate: signal.candidate })
+          .catch((error: unknown) => {
+            setCallError(error instanceof Error ? error.message : "ICE signaling failed.");
+          });
+      },
+      onRemoteTrack(peerId, event) {
+        setRemoteStreams((current) => {
+          const existing = current[peerId];
+          const stream = new MediaStream(existing?.getTracks() ?? []);
+          if (!stream.getTracks().some((track) => track.id === event.track.id)) {
+            stream.addTrack(event.track);
+          }
+          return { ...current, [peerId]: stream };
+        });
+      },
+      onConnectionState(peerId, state) {
+        setCallRoute(`${shortParticipant(peerId)} · ${state}`);
+      },
+      onNegotiationNeeded(peerId) {
+        void router
+          .createOffer(peerId)
+          .then((description) =>
+            callSignaling.current?.sendSignal(peerId, { type: "offer", description }),
+          )
+          .catch((error: unknown) => {
+            setCallError(error instanceof Error ? error.message : "Call renegotiation failed.");
+          });
+      },
     });
     const turnEndpoint = import.meta.env.VITE_NEXUS_TURN_CREDENTIAL_URL as string | undefined;
+    const turnAuthorization = activeInvite
+      ? `Bearer ${activeInvite.accessToken}`
+      : import.meta.env.VITE_NEXUS_TURN_AUTHORIZATION;
     const iceServers = turnEndpoint
-      ? [
-          turnIceServer(
-            await fetchTurnCredential(
-              new URL(turnEndpoint),
-              import.meta.env.VITE_NEXUS_TURN_AUTHORIZATION,
-            ),
-          ),
-        ]
+      ? [turnIceServer(await fetchTurnCredential(new URL(turnEndpoint), turnAuthorization))]
       : [];
     await router.join({
-      callId: activeRuntime.channelId,
+      callId: activeInvite?.roomId ?? activeRuntime.channelId,
       localPeerId: identity.deviceId,
       iceServers,
     });
     callRouter.current = router;
+    if (activeInvite && signalingEndpoint) {
+      let signaling: MeetingSignalingClient;
+      signaling = new MeetingSignalingClient({
+        endpoint: new URL(signalingEndpoint),
+        invite: activeInvite,
+        participantId: identity.deviceId,
+        events: {
+          onReady(participants) {
+            setCallParticipants([identity.deviceId, ...participants]);
+            for (const participantId of participants) {
+              void prepareCallPeer(router, participantId);
+            }
+          },
+          onParticipantJoined(participantId) {
+            setCallParticipants((current) => [...new Set([...current, participantId])]);
+            void prepareCallPeer(router, participantId);
+          },
+          onParticipantLeft(participantId) {
+            setCallParticipants((current) => current.filter((id) => id !== participantId));
+            setRemoteStreams((current) => {
+              const next = { ...current };
+              delete next[participantId];
+              return next;
+            });
+            callRemoteDescriptions.current.delete(participantId);
+            pendingCallIce.current.delete(participantId);
+            void router.removeParticipant(participantId);
+          },
+          onSignal(from, signal) {
+            void receiveCallSignal(router, signaling, from, signal);
+          },
+          onError(message) {
+            setCallError(message);
+          },
+          onDisconnected() {
+            setCallError("Meeting signaling disconnected. Leave and rejoin to reconnect.");
+          },
+        },
+      });
+      callSignaling.current = signaling;
+      await signaling.connect();
+    } else {
+      setCallParticipants([identity.deviceId]);
+      setCallRoute("Local media only · signaling not configured");
+    }
     if (navigator.mediaDevices?.enumerateDevices) {
       setMediaDevices(await navigator.mediaDevices.enumerateDevices());
     }
     setCallJoined(true);
     setCallError(null);
+  }
+
+  async function shareMeeting() {
+    const hostSessionEndpoint = import.meta.env.VITE_NEXUS_MEETING_HOST_SESSION_URL as
+      | string
+      | undefined;
+    if (!meetingInvite && !meetingHostAuthorization() && hostSessionEndpoint) {
+      setMeetingHostAccessOpen(true);
+      setMeetingLinkError(null);
+      setMeetingShareStatus("Enter your private host passphrase to create a meeting link.");
+      return;
+    }
+    try {
+      const invite = await ensureMeetingInvite();
+      const publicAppUrl =
+        (import.meta.env.VITE_NEXUS_WEB_APP_URL as string | undefined) ?? window.location.href;
+      const link = buildMeetingUrl(new URL(publicAppUrl), invite);
+      if (navigator.share) {
+        await navigator.share({
+          title: `${invite.roomName} · ${productBrand.name}`,
+          text: `Join my ${productBrand.name} meeting`,
+          url: link.toString(),
+        });
+        setMeetingShareStatus("Meeting link shared");
+      } else {
+        await navigator.clipboard.writeText(link.toString());
+        setMeetingShareStatus("Meeting link copied");
+      }
+      setMeetingLinkError(null);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setMeetingLinkError(
+        error instanceof Error ? error.message : "The meeting link could not be shared.",
+      );
+    }
+  }
+
+  async function unlockMeetingHost(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const endpoint = import.meta.env.VITE_NEXUS_MEETING_HOST_SESSION_URL as string | undefined;
+    if (!endpoint || meetingHostBusy) return;
+    setMeetingHostBusy(true);
+    try {
+      const session = await createMeetingHostSession(new URL(endpoint), meetingHostPassphrase);
+      meetingHostSession.current = session;
+      setMeetingHostPassphrase("");
+      await ensureMeetingInvite(session.authorization);
+      setMeetingHostAccessOpen(false);
+      setMeetingLinkError(null);
+      setMeetingShareStatus("Host access unlocked. Tap Invite to share the link.");
+    } catch (error) {
+      setMeetingLinkError(error instanceof Error ? error.message : "Host access failed.");
+    } finally {
+      setMeetingHostBusy(false);
+    }
   }
 
   async function toggleMicrophone() {
@@ -583,13 +784,65 @@ export function App() {
   }
 
   async function leaveCall() {
+    callSignaling.current?.leave();
+    callSignaling.current = null;
     await callRouter.current?.leave();
     callRouter.current = null;
+    pendingCallIce.current.clear();
+    callRemoteDescriptions.current.clear();
     setCallJoined(false);
+    setCallParticipants([]);
+    setRemoteStreams({});
     setMicrophoneActive(false);
     setCameraActive(false);
     setScreenActive(false);
     setCallRoute("Waiting for peers");
+  }
+
+  async function prepareCallPeer(router: MeshMediaRouter, participantId: string) {
+    await router.addParticipant({ peerId: participantId });
+  }
+
+  async function receiveCallSignal(
+    router: MeshMediaRouter,
+    signaling: MeetingSignalingClient,
+    from: string,
+    signal: MeetingSignal,
+  ) {
+    try {
+      await router.addParticipant({ peerId: from });
+      if (signal.type === "ice") {
+        if (!callRemoteDescriptions.current.has(from)) {
+          const pending = pendingCallIce.current.get(from) ?? [];
+          pending.push(signal.candidate);
+          pendingCallIce.current.set(from, pending);
+          return;
+        }
+        await router.receiveIceCandidate(from, signal.candidate);
+        return;
+      }
+      if (signal.type === "leave") {
+        await router.removeParticipant(from);
+        return;
+      }
+      await router.receiveDescription(from, signal.description);
+      callRemoteDescriptions.current.add(from);
+      for (const candidate of pendingCallIce.current.get(from) ?? []) {
+        await router.receiveIceCandidate(from, candidate);
+      }
+      pendingCallIce.current.delete(from);
+      if (signal.type === "offer") {
+        const answer = router.localDescription(from);
+        if (!answer) throw new Error("The call answer could not be created.");
+        await signaling.sendSignal(from, { type: "answer", description: answer });
+      }
+    } catch (error) {
+      setCallError(error instanceof Error ? error.message : "Meeting signaling failed.");
+    }
+  }
+
+  if (meetingOnlyMode) {
+    return <MeetingPage />;
   }
 
   if (runtimeState !== "ready" || !runtime) {
@@ -720,8 +973,51 @@ export function App() {
                     ? "Alerts unavailable"
                     : "Alerts"}
             </button>
+            <button type="button" onClick={() => void shareMeeting()}>
+              <Share2 size={16} /> Invite
+            </button>
           </div>
         </section>
+
+        {(meetingInvite || meetingLinkError || meetingShareStatus || meetingHostAccessOpen) && (
+          <section className="meeting-link-status" aria-live="polite">
+            <Share2 size={17} aria-hidden="true" />
+            <div>
+              <strong>
+                {meetingInvite
+                  ? `Meeting link · ${meetingInvite.roomName}`
+                  : "Meeting invitation unavailable"}
+              </strong>
+              <span>
+                {meetingLinkError ??
+                  meetingShareStatus ??
+                  "This invitation is ready. Join when you are comfortable sharing media."}
+              </span>
+            </div>
+          </section>
+        )}
+
+        {meetingHostAccessOpen && (
+          <form className="meeting-host-access" onSubmit={(event) => void unlockMeetingHost(event)}>
+            <label htmlFor="meeting-host-passphrase">Private host passphrase</label>
+            <div>
+              <input
+                id="meeting-host-passphrase"
+                type="password"
+                autoComplete="current-password"
+                value={meetingHostPassphrase}
+                onChange={(event) => setMeetingHostPassphrase(event.target.value)}
+                minLength={32}
+                maxLength={256}
+                required
+              />
+              <button type="submit" disabled={meetingHostBusy}>
+                {meetingHostBusy ? "Unlocking…" : "Unlock invites"}
+              </button>
+            </div>
+            <span>This stays in this tab and is never included in links you share.</span>
+          </form>
+        )}
 
         {searchOpen && (
           <section className="search-panel" aria-label="Search this conversation">
@@ -824,78 +1120,120 @@ export function App() {
           <div ref={messageEnd} />
         </section>
 
-        <section className="call-dock" aria-label="Voice call controls">
-          <div aria-live="polite">
-            <strong>{callJoined ? "In The observatory" : "Voice disconnected"}</strong>
-            <span>{callError ?? callRoute}</span>
-          </div>
-          <button
-            type="button"
-            className={microphoneActive ? "active" : ""}
-            onClick={() => void toggleMicrophone()}
-            aria-pressed={microphoneActive}
-            aria-label="Toggle microphone"
-          >
-            <Mic size={16} />
-          </button>
-          <button
-            type="button"
-            className={cameraActive ? "active" : ""}
-            onClick={() => void toggleCamera()}
-            aria-pressed={cameraActive}
-            aria-label="Toggle camera"
-          >
-            <Camera size={16} />
-          </button>
-          <button
-            type="button"
-            className={screenActive ? "active" : ""}
-            onClick={() => void toggleScreen()}
-            aria-pressed={screenActive}
-            aria-label="Toggle screen share"
-          >
-            <MonitorUp size={16} />
-          </button>
-          <select
-            aria-label="Microphone device"
-            value={microphoneId}
-            onChange={(event) => setMicrophoneId(event.target.value)}
-          >
-            <option value="">Default mic</option>
-            {mediaDevices
-              .filter((device) => device.kind === "audioinput")
-              .map((device, index) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Microphone ${index + 1}`}
-                </option>
+        <div className={`meeting-shell ${callJoined ? "meeting-shell-active" : ""}`}>
+          {callJoined && (
+            <section className="meeting-stage" aria-label="Meeting participants">
+              {Object.entries(remoteStreams).map(([participantId, stream]) => (
+                <div className="meeting-tile" key={participantId}>
+                  {/* Live peer media has no pre-authored caption track; captions require a separate real-time service. */}
+                  {/* biome-ignore lint/a11y/useMediaCaption: live WebRTC stream */}
+                  <video
+                    ref={(element) => {
+                      if (element && element.srcObject !== stream) element.srcObject = stream;
+                    }}
+                    autoPlay
+                    playsInline
+                    aria-label={`Remote participant ${shortParticipant(participantId)}`}
+                  />
+                  <span>{shortParticipant(participantId)}</span>
+                </div>
               ))}
-          </select>
-          <select
-            aria-label="Camera device"
-            value={cameraId}
-            onChange={(event) => setCameraId(event.target.value)}
-          >
-            <option value="">Default camera</option>
-            {mediaDevices
-              .filter((device) => device.kind === "videoinput")
-              .map((device, index) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Camera ${index + 1}`}
-                </option>
-              ))}
-          </select>
-          <button type="button" onClick={() => void inspectCallRoute()}>
-            Route
-          </button>
-          <button
-            type="button"
-            className="leave"
-            onClick={() => void (callJoined ? leaveCall() : joinCall())}
-          >
-            {callJoined ? <PhoneOff size={16} /> : <Signal size={16} />}
-            {callJoined ? "Leave" : "Join"}
-          </button>
-        </section>
+              {Object.keys(remoteStreams).length === 0 && (
+                <div className="meeting-empty">
+                  <Users size={20} aria-hidden="true" />
+                  <strong>
+                    {callParticipants.length > 1
+                      ? "Connecting participant media…"
+                      : "Waiting for friends…"}
+                  </strong>
+                  <span>
+                    {callParticipants.length} of 6 participant
+                    {callParticipants.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="call-dock" aria-label="Voice call controls">
+            <div aria-live="polite">
+              <strong>
+                {callJoined
+                  ? `In ${meetingInvite?.roomName ?? "The observatory"}`
+                  : meetingInvite
+                    ? `Ready for ${meetingInvite.roomName}`
+                    : "Voice disconnected"}
+              </strong>
+              <span>{callError ?? callRoute}</span>
+            </div>
+            <button
+              type="button"
+              className={microphoneActive ? "active" : ""}
+              onClick={() => void toggleMicrophone()}
+              aria-pressed={microphoneActive}
+              aria-label="Toggle microphone"
+            >
+              <Mic size={16} />
+            </button>
+            <button
+              type="button"
+              className={cameraActive ? "active" : ""}
+              onClick={() => void toggleCamera()}
+              aria-pressed={cameraActive}
+              aria-label="Toggle camera"
+            >
+              <Camera size={16} />
+            </button>
+            <button
+              type="button"
+              className={screenActive ? "active" : ""}
+              onClick={() => void toggleScreen()}
+              aria-pressed={screenActive}
+              aria-label="Toggle screen share"
+            >
+              <MonitorUp size={16} />
+            </button>
+            <select
+              aria-label="Microphone device"
+              value={microphoneId}
+              onChange={(event) => setMicrophoneId(event.target.value)}
+            >
+              <option value="">Default mic</option>
+              {mediaDevices
+                .filter((device) => device.kind === "audioinput")
+                .map((device, index) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Microphone ${index + 1}`}
+                  </option>
+                ))}
+            </select>
+            <select
+              aria-label="Camera device"
+              value={cameraId}
+              onChange={(event) => setCameraId(event.target.value)}
+            >
+              <option value="">Default camera</option>
+              {mediaDevices
+                .filter((device) => device.kind === "videoinput")
+                .map((device, index) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Camera ${index + 1}`}
+                  </option>
+                ))}
+            </select>
+            <button type="button" onClick={() => void inspectCallRoute()}>
+              Route
+            </button>
+            <button
+              type="button"
+              className="leave"
+              onClick={() => void (callJoined ? leaveCall() : joinCall())}
+            >
+              {callJoined ? <PhoneOff size={16} /> : <Signal size={16} />}
+              {callJoined ? "Leave" : "Join"}
+            </button>
+          </section>
+        </div>
 
         <form className="composer" onSubmit={submit}>
           {(attachment || attachmentError) && (

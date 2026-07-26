@@ -12,6 +12,10 @@ The clients share protocol types, identity and cryptography services, sync
 logic, WebRTC utilities, and branding tokens. They deliberately do not share
 their page layouts.
 
+Freenet nodes and contracts remain authoritative; Nexus does not require a
+central application server. The optional web gateway and TURN service are
+non-authoritative edge helpers for browsers and difficult WebRTC network paths.
+
 ## Project status
 
 Phase 0 research and architecture are complete against Freenet Core
@@ -94,6 +98,20 @@ The script uses the pinned Core executable under `.research` when present, or
 `NEXUS_FREENET_BIN` when supplied. The plain simulation commands remain
 `pnpm dev:desktop-ui` and `pnpm dev:web`.
 
+## Share a temporary phone meeting
+
+To serve the non-authoritative meeting edge from this computer through a
+temporary HTTPS link:
+
+```powershell
+winget install --id Cloudflare.cloudflared
+pnpm friend:preview
+```
+
+See [Share a meeting from your own computer](docs/friend-preview.md) for the
+privacy, uptime, and direct-connection limits. Stop it with
+`pnpm friend:stop`.
+
 ## Verify
 
 ```powershell
@@ -122,6 +140,8 @@ pnpm test:freenet-two-node
 - [Gateway protocol](docs/gateway-protocol.md)
 - [WebRTC topology](docs/webrtc-topology.md)
 - [TURN operations](docs/turn-operations.md)
+- [Private meeting pilot deployment](docs/meeting-pilot-deployment.md)
+- [Temporary friend preview](docs/friend-preview.md)
 - [Real-node soak operations](docs/soak-operations.md)
 - [Phase 0 checklist](docs/phase-0-checklist.md)
 - [Phase 1 checklist](docs/phase-1-checklist.md)

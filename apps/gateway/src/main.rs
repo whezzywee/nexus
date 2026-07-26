@@ -9,7 +9,10 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, State},
+    extract::{
+        ConnectInfo, Path, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
@@ -27,12 +30,13 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use tokio::{
-    sync::{Mutex, Semaphore},
+    sync::{Mutex, Semaphore, broadcast},
     time::timeout,
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
+    services::ServeDir,
     set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
@@ -44,6 +48,14 @@ const IDEMPOTENCY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const IDEMPOTENCY_CAPACITY: usize = 20_000;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
+const DEFAULT_MEETING_INVITE_TTL_SECONDS: u64 = 24 * 60 * 60;
+const MAX_MEETING_INVITE_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+const DEFAULT_MEETING_HOST_SESSION_TTL_SECONDS: u64 = 15 * 60;
+const MAX_MEETING_HOST_SESSION_TTL_SECONDS: u64 = 60 * 60;
+const MAX_MEETING_PARTICIPANTS: usize = 6;
+const MAX_MEETING_SIGNAL_BYTES: usize = 64 * 1024;
+const MEETING_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha1 = Hmac<Sha1>;
@@ -56,20 +68,30 @@ struct TurnConfig {
 }
 
 #[derive(Clone)]
+struct UpstreamConfig {
+    allowed_contracts: Arc<HashSet<String>>,
+    url: String,
+    token: Arc<str>,
+}
+
+#[derive(Clone)]
 struct GatewayConfig {
     gateway_id: String,
     bind: SocketAddr,
     hmac_secret: Arc<[u8]>,
-    allowed_contracts: Arc<HashSet<String>>,
     allowed_origins: Vec<HeaderValue>,
-    upstream_url: String,
-    upstream_token: Arc<str>,
+    upstream: Option<UpstreamConfig>,
     idempotency_path: PathBuf,
     subject_rate: f64,
     subject_burst: f64,
     ip_rate: f64,
     ip_burst: f64,
     turn: Option<TurnConfig>,
+    meeting_invite_ttl_seconds: u64,
+    meeting_host_secret: Option<Arc<[u8]>>,
+    meeting_host_session_ttl_seconds: u64,
+    trust_proxy_headers: bool,
+    web_static_dir: Option<PathBuf>,
 }
 
 impl GatewayConfig {
@@ -78,17 +100,15 @@ impl GatewayConfig {
             .unwrap_or_else(|_| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8787).to_string())
             .parse()
             .map_err(|error| format!("NEXUS_GATEWAY_BIND is invalid: {error}"))?;
-        let secret = env::var("NEXUS_GATEWAY_HMAC_SECRET")
-            .map_err(|_| "NEXUS_GATEWAY_HMAC_SECRET is required".to_owned())?;
-        if secret.len() < 32 {
-            return Err("NEXUS_GATEWAY_HMAC_SECRET must contain at least 32 bytes".into());
-        }
-        let allowed_contracts = comma_set("NEXUS_GATEWAY_CONTRACT_KEYS");
-        if allowed_contracts.is_empty() {
-            return Err(
-                "NEXUS_GATEWAY_CONTRACT_KEYS must contain at least one contract key".into(),
-            );
-        }
+        let hmac_secret = optional_secret(
+            "NEXUS_GATEWAY_HMAC_SECRET",
+            "NEXUS_GATEWAY_HMAC_SECRET_FILE",
+        )?
+        .ok_or_else(|| {
+            "NEXUS_GATEWAY_HMAC_SECRET or NEXUS_GATEWAY_HMAC_SECRET_FILE is required".to_owned()
+        })?;
+        let meeting_only = env_flag("NEXUS_GATEWAY_MEETING_ONLY", false)?;
+        let upstream = upstream_config_from_env(!meeting_only)?;
         let allowed_origins = env::var("NEXUS_GATEWAY_ORIGINS")
             .unwrap_or_default()
             .split(',')
@@ -103,14 +123,6 @@ impl GatewayConfig {
         if !bind.ip().is_loopback() && allowed_origins.is_empty() {
             return Err("A non-loopback gateway requires NEXUS_GATEWAY_ORIGINS".into());
         }
-        let upstream_url = env::var("NEXUS_GATEWAY_UPSTREAM_URL")
-            .map_err(|_| "NEXUS_GATEWAY_UPSTREAM_URL is required".to_owned())?;
-        validate_upstream_url(&upstream_url)?;
-        let upstream_token = env::var("NEXUS_GATEWAY_UPSTREAM_TOKEN")
-            .map_err(|_| "NEXUS_GATEWAY_UPSTREAM_TOKEN is required".to_owned())?;
-        if upstream_token.len() < 24 {
-            return Err("NEXUS_GATEWAY_UPSTREAM_TOKEN is unexpectedly short".into());
-        }
         let idempotency_path = env::var_os("NEXUS_GATEWAY_IDEMPOTENCY_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -118,36 +130,121 @@ impl GatewayConfig {
                     .join("gateway")
                     .join("idempotency.json")
             });
-        if !bind.ip().is_loopback() && env::var_os("NEXUS_GATEWAY_IDEMPOTENCY_PATH").is_none() {
+        if upstream.is_some()
+            && !bind.ip().is_loopback()
+            && env::var_os("NEXUS_GATEWAY_IDEMPOTENCY_PATH").is_none()
+        {
             return Err("A non-loopback gateway requires NEXUS_GATEWAY_IDEMPOTENCY_PATH".into());
         }
+        let meeting_host_secret = optional_secret(
+            "NEXUS_MEETING_HOST_SECRET",
+            "NEXUS_MEETING_HOST_SECRET_FILE",
+        )?;
+        let web_static_dir = env::var_os("NEXUS_WEB_STATIC_DIR")
+            .map(PathBuf::from)
+            .map(|path| {
+                if !path.is_dir() {
+                    return Err("NEXUS_WEB_STATIC_DIR must point to an existing directory".into());
+                }
+                std::fs::canonicalize(path)
+                    .map_err(|error| format!("Could not resolve NEXUS_WEB_STATIC_DIR: {error}"))
+            })
+            .transpose()?;
         Ok(Self {
             gateway_id: env::var("NEXUS_GATEWAY_ID").unwrap_or_else(|_| "nexus-gateway".into()),
             bind,
-            hmac_secret: Arc::from(secret.into_bytes()),
-            allowed_contracts: Arc::new(allowed_contracts),
+            hmac_secret,
             allowed_origins,
-            upstream_url: upstream_url.trim_end_matches('/').to_owned(),
-            upstream_token: Arc::from(upstream_token),
+            upstream,
             idempotency_path,
             subject_rate: positive_number("NEXUS_GATEWAY_SUBJECT_RATE", 5.0)?,
             subject_burst: positive_number("NEXUS_GATEWAY_SUBJECT_BURST", 20.0)?,
             ip_rate: positive_number("NEXUS_GATEWAY_IP_RATE", 20.0)?,
             ip_burst: positive_number("NEXUS_GATEWAY_IP_BURST", 60.0)?,
             turn: turn_config_from_env()?,
+            meeting_invite_ttl_seconds: bounded_u64(
+                "NEXUS_MEETING_INVITE_TTL_SECONDS",
+                DEFAULT_MEETING_INVITE_TTL_SECONDS,
+                5 * 60,
+                MAX_MEETING_INVITE_TTL_SECONDS,
+            )?,
+            meeting_host_secret,
+            meeting_host_session_ttl_seconds: bounded_u64(
+                "NEXUS_MEETING_HOST_SESSION_TTL_SECONDS",
+                DEFAULT_MEETING_HOST_SESSION_TTL_SECONDS,
+                5 * 60,
+                MAX_MEETING_HOST_SESSION_TTL_SECONDS,
+            )?,
+            trust_proxy_headers: env_flag("NEXUS_GATEWAY_TRUST_PROXY_HEADERS", false)?,
+            web_static_dir,
         })
     }
 }
 
+fn upstream_config_from_env(required: bool) -> Result<Option<UpstreamConfig>, String> {
+    let allowed_contracts = comma_set("NEXUS_GATEWAY_CONTRACT_KEYS");
+    let url = env::var("NEXUS_GATEWAY_UPSTREAM_URL").ok();
+    let token = env::var("NEXUS_GATEWAY_UPSTREAM_TOKEN").ok();
+    if !required && allowed_contracts.is_empty() && url.is_none() && token.is_none() {
+        return Ok(None);
+    }
+    if allowed_contracts.is_empty() {
+        return Err("NEXUS_GATEWAY_CONTRACT_KEYS must contain at least one contract key".into());
+    }
+    let url = url.ok_or_else(|| "NEXUS_GATEWAY_UPSTREAM_URL is required".to_owned())?;
+    validate_upstream_url(&url)?;
+    let token = token.ok_or_else(|| "NEXUS_GATEWAY_UPSTREAM_TOKEN is required".to_owned())?;
+    if token.len() < 24 {
+        return Err("NEXUS_GATEWAY_UPSTREAM_TOKEN is unexpectedly short".into());
+    }
+    Ok(Some(UpstreamConfig {
+        allowed_contracts: Arc::new(allowed_contracts),
+        url: url.trim_end_matches('/').to_owned(),
+        token: Arc::from(token),
+    }))
+}
+
+fn env_flag(name: &str, default: bool) -> Result<bool, String> {
+    match env::var(name) {
+        Ok(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
+        Ok(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
+        Ok(_) => Err(format!("{name} must be true, false, 1, or 0")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn optional_secret(env_name: &str, file_name: &str) -> Result<Option<Arc<[u8]>>, String> {
+    let direct = env::var(env_name).ok();
+    let file = env::var_os(file_name);
+    if direct.is_some() && file.is_some() {
+        return Err(format!("{env_name} and {file_name} cannot both be set"));
+    }
+    let secret = match (direct, file) {
+        (Some(value), None) => Some(value),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(&path)
+                .map_err(|error| format!("Could not read {file_name}: {error}"))?,
+        ),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    secret
+        .map(|value| {
+            let trimmed = value.trim();
+            if !(32..=256).contains(&trimmed.len()) {
+                return Err(format!("{env_name} must contain between 32 and 256 bytes"));
+            }
+            Ok(Arc::from(trimmed.as_bytes()))
+        })
+        .transpose()
+}
+
 fn turn_config_from_env() -> Result<Option<TurnConfig>, String> {
-    let secret = env::var("NEXUS_TURN_SECRET").ok();
+    let secret = optional_secret("NEXUS_TURN_SECRET", "NEXUS_TURN_SECRET_FILE")?;
     let urls = env::var("NEXUS_TURN_URLS").ok();
     match (secret, urls) {
         (None, None) => Ok(None),
         (Some(secret), Some(raw_urls)) => {
-            if secret.len() < 32 {
-                return Err("NEXUS_TURN_SECRET must contain at least 32 bytes".into());
-            }
             let urls = raw_urls
                 .split(',')
                 .map(str::trim)
@@ -170,7 +267,7 @@ fn turn_config_from_env() -> Result<Option<TurnConfig>, String> {
                 return Err("NEXUS_TURN_TTL_SECONDS must be between 60 and 3600".into());
             }
             Ok(Some(TurnConfig {
-                secret: Arc::from(secret.into_bytes()),
+                secret,
                 urls: Arc::from(urls),
                 ttl_seconds,
             }))
@@ -202,6 +299,19 @@ fn positive_number(name: &str, default: f64) -> Result<f64, String> {
     Ok(value)
 }
 
+fn bounded_u64(name: &str, default: u64, minimum: u64, maximum: u64) -> Result<u64, String> {
+    let value = match env::var(name) {
+        Ok(raw) => raw
+            .parse()
+            .map_err(|error| format!("{name} is invalid: {error}"))?,
+        Err(_) => default,
+    };
+    if !(minimum..=maximum).contains(&value) {
+        return Err(format!("{name} must be between {minimum} and {maximum}"));
+    }
+    Ok(value)
+}
+
 fn validate_upstream_url(raw: &str) -> Result<(), String> {
     let url = reqwest::Url::parse(raw)
         .map_err(|error| format!("NEXUS_GATEWAY_UPSTREAM_URL is invalid: {error}"))?;
@@ -224,6 +334,7 @@ struct GatewayState {
     client: reqwest::Client,
     rates: StdMutex<HashMap<String, TokenBucket>>,
     idempotency: Mutex<HashMap<String, IdempotencyEntry>>,
+    meeting_rooms: Mutex<HashMap<String, MeetingRoom>>,
     upstream_slots: Semaphore,
 }
 
@@ -238,6 +349,11 @@ struct IdempotencyEntry {
     payload_hash: String,
     created_at: u64,
     response: Option<UpdateResponse>,
+}
+
+struct MeetingRoom {
+    participants: HashSet<String>,
+    sender: broadcast::Sender<MeetingServerFrame>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -293,6 +409,68 @@ struct TurnCredentialResponse {
     expires_at: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingInviteRequest {
+    room_id: String,
+    room_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingInviteResponse {
+    room_id: String,
+    room_name: String,
+    access_token: String,
+    expires_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingHostSessionResponse {
+    access_token: String,
+    expires_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MeetingClientFrame {
+    Join {
+        access_token: String,
+        participant_id: String,
+    },
+    Signal {
+        to: String,
+        ciphertext: String,
+    },
+    Ping,
+    Leave,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MeetingServerFrame {
+    Ready {
+        participants: Vec<String>,
+    },
+    ParticipantJoined {
+        participant_id: String,
+    },
+    ParticipantLeft {
+        participant_id: String,
+    },
+    Signal {
+        from: String,
+        to: String,
+        ciphertext: String,
+    },
+    Pong,
+    Error {
+        code: &'static str,
+        message: String,
+    },
+}
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -337,12 +515,16 @@ impl IntoResponse for ApiError {
     }
 }
 
-async fn health() -> Json<HealthResponse> {
+async fn health(State(state): State<Arc<GatewayState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "nexus-gateway",
         protocol_version: PROTOCOL_VERSION,
         status: "ready",
-        freenet: "configured",
+        freenet: if state.config.upstream.is_some() {
+            "configured"
+        } else {
+            "disabled"
+        },
     })
 }
 
@@ -355,7 +537,11 @@ async fn submit_update(
 ) -> Result<(StatusCode, Json<UpdateResponse>), ApiError> {
     let claims = authorize(&headers, &state.config)?;
     authorize_contract(&claims, &contract_key, &state.config)?;
-    enforce_rate_limits(&state, &claims.sub, remote.ip())?;
+    enforce_rate_limits(
+        &state,
+        &claims.sub,
+        client_ip(&headers, remote, state.config.trust_proxy_headers)?,
+    )?;
     let payload = validate_update(&headers, &update)?;
 
     if let Some(replayed) =
@@ -408,7 +594,11 @@ async fn issue_turn_credential(
             "The token cannot request TURN credentials",
         ));
     }
-    enforce_rate_limits(&state, &claims.sub, remote.ip())?;
+    enforce_rate_limits(
+        &state,
+        &claims.sub,
+        client_ip(&headers, remote, state.config.trust_proxy_headers)?,
+    )?;
     let turn = state.config.turn.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -420,6 +610,470 @@ async fn issue_turn_credential(
     let mut response_headers = HeaderMap::new();
     response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok((response_headers, Json(credential)))
+}
+
+async fn issue_meeting_invite(
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    Json(request): Json<MeetingInviteRequest>,
+) -> Result<(StatusCode, HeaderMap, Json<MeetingInviteResponse>), ApiError> {
+    let claims = authorize(&headers, &state.config)?;
+    if !claims.permissions.iter().any(|value| value == "meeting") {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "The token cannot create meeting invitations",
+        ));
+    }
+    enforce_rate_limits(
+        &state,
+        &claims.sub,
+        client_ip(&headers, remote, state.config.trust_proxy_headers)?,
+    )?;
+    validate_meeting_room(&request.room_id, &request.room_name)?;
+    let now = unix_time();
+    let expiry = now
+        .checked_add(state.config.meeting_invite_ttl_seconds)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "clock_error",
+                "Meeting invitation expiry overflowed",
+            )
+        })?;
+    let invite_claims = AccessClaims {
+        sub: format!("meeting:{}:{}", request.room_id, request_id()),
+        exp: expiry,
+        permissions: vec!["meeting".into(), "turn".into()],
+        contracts: Vec::new(),
+    };
+    let access_token = sign_access_token(&invite_claims, &state.config.hmac_secret)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        StatusCode::CREATED,
+        response_headers,
+        Json(MeetingInviteResponse {
+            room_id: request.room_id,
+            room_name: request.room_name.trim().to_owned(),
+            access_token,
+            expires_at: expiry.saturating_mul(1000),
+        }),
+    ))
+}
+
+async fn issue_meeting_host_session(
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<MeetingHostSessionResponse>), ApiError> {
+    let ip = client_ip(&headers, remote, state.config.trust_proxy_headers)?;
+    enforce_rate_limits(&state, &format!("meeting-host-session:{ip}"), ip)?;
+    let configured_secret = state.config.meeting_host_secret.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "host_sessions_unavailable",
+            "Meeting host sessions are not configured",
+        )
+    })?;
+    let supplied_secret = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Nexus-Host "))
+        .filter(|value| (32..=256).contains(&value.len()))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid_host_secret",
+                "The meeting host passphrase is invalid",
+            )
+        })?;
+    if !meeting_host_secret_matches(configured_secret, supplied_secret.as_bytes()) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_host_secret",
+            "The meeting host passphrase is invalid",
+        ));
+    }
+    let now = unix_time();
+    let expiry = now
+        .checked_add(state.config.meeting_host_session_ttl_seconds)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "clock_error",
+                "Meeting host session expiry overflowed",
+            )
+        })?;
+    let claims = AccessClaims {
+        sub: format!("meeting-host:{}", request_id()),
+        exp: expiry,
+        permissions: vec!["meeting".into()],
+        contracts: Vec::new(),
+    };
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        response_headers,
+        Json(MeetingHostSessionResponse {
+            access_token: sign_access_token(&claims, &state.config.hmac_secret)?,
+            expires_at: expiry.saturating_mul(1000),
+        }),
+    ))
+}
+
+fn meeting_host_secret_matches(expected: &[u8], supplied: &[u8]) -> bool {
+    const CONTEXT: &[u8] = b"nexus:meeting-host-session:v1";
+    let Ok(mut supplied_mac) = HmacSha256::new_from_slice(supplied) else {
+        return false;
+    };
+    supplied_mac.update(CONTEXT);
+    let supplied_tag = supplied_mac.finalize().into_bytes();
+    let Ok(mut expected_mac) = HmacSha256::new_from_slice(expected) else {
+        return false;
+    };
+    expected_mac.update(CONTEXT);
+    expected_mac.verify_slice(&supplied_tag).is_ok()
+}
+
+async fn meeting_websocket(
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<GatewayState>>,
+    Path(room_id): Path<String>,
+    headers: HeaderMap,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    validate_meeting_room(&room_id, "Meeting")?;
+    validate_meeting_origin(&headers, &state.config)?;
+    let ip = client_ip(&headers, remote, state.config.trust_proxy_headers)?;
+    Ok(websocket
+        .max_message_size(MAX_MEETING_SIGNAL_BYTES + 8 * 1024)
+        .max_frame_size(MAX_MEETING_SIGNAL_BYTES + 8 * 1024)
+        .on_upgrade(move |socket| serve_meeting_socket(socket, state, room_id, ip))
+        .into_response())
+}
+
+async fn serve_meeting_socket(
+    mut socket: WebSocket,
+    state: Arc<GatewayState>,
+    room_id: String,
+    remote_ip: IpAddr,
+) {
+    let Some(Ok(Message::Text(first_message))) = timeout(MEETING_JOIN_TIMEOUT, socket.recv())
+        .await
+        .ok()
+        .flatten()
+    else {
+        let _ = send_meeting_frame(
+            &mut socket,
+            &MeetingServerFrame::Error {
+                code: "join_required",
+                message: "The first meeting frame must authenticate and join.".into(),
+            },
+        )
+        .await;
+        return;
+    };
+    let Ok(MeetingClientFrame::Join {
+        access_token,
+        participant_id,
+    }) = serde_json::from_str::<MeetingClientFrame>(&first_message)
+    else {
+        let _ = send_meeting_frame(
+            &mut socket,
+            &MeetingServerFrame::Error {
+                code: "join_required",
+                message: "The first meeting frame must authenticate and join.".into(),
+            },
+        )
+        .await;
+        return;
+    };
+    let claims =
+        match authorize_meeting_capability(&access_token, &room_id, &participant_id, &state.config)
+        {
+            Ok(claims) => claims,
+            Err(error) => {
+                let _ = send_meeting_frame(
+                    &mut socket,
+                    &MeetingServerFrame::Error {
+                        code: error.code,
+                        message: error.message,
+                    },
+                )
+                .await;
+                return;
+            }
+        };
+    if let Err(error) = enforce_rate_limits(&state, &claims.sub, remote_ip) {
+        let _ = send_meeting_frame(
+            &mut socket,
+            &MeetingServerFrame::Error {
+                code: error.code,
+                message: error.message,
+            },
+        )
+        .await;
+        return;
+    }
+
+    let (sender, mut receiver, participants) = {
+        let mut rooms = state.meeting_rooms.lock().await;
+        let room = rooms.entry(room_id.clone()).or_insert_with(|| {
+            let (sender, _) = broadcast::channel(128);
+            MeetingRoom {
+                participants: HashSet::new(),
+                sender,
+            }
+        });
+        if room.participants.contains(&participant_id) {
+            let _ = send_meeting_frame(
+                &mut socket,
+                &MeetingServerFrame::Error {
+                    code: "participant_conflict",
+                    message: "This participant is already connected.".into(),
+                },
+            )
+            .await;
+            return;
+        }
+        if room.participants.len() >= MAX_MEETING_PARTICIPANTS {
+            let _ = send_meeting_frame(
+                &mut socket,
+                &MeetingServerFrame::Error {
+                    code: "room_full",
+                    message: "This small meeting already has six participants.".into(),
+                },
+            )
+            .await;
+            return;
+        }
+        let mut participants = room.participants.iter().cloned().collect::<Vec<_>>();
+        participants.sort();
+        room.participants.insert(participant_id.clone());
+        (room.sender.clone(), room.sender.subscribe(), participants)
+    };
+
+    if send_meeting_frame(&mut socket, &MeetingServerFrame::Ready { participants })
+        .await
+        .is_err()
+    {
+        remove_meeting_participant(&state, &room_id, &participant_id).await;
+        return;
+    }
+    let _ = sender.send(MeetingServerFrame::ParticipantJoined {
+        participant_id: participant_id.clone(),
+    });
+
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(payload))) => {
+                        match serde_json::from_str::<MeetingClientFrame>(&payload) {
+                            Ok(MeetingClientFrame::Signal { to, ciphertext })
+                                if valid_participant_id(&to)
+                                    && valid_meeting_ciphertext(&ciphertext)
+                                    && meeting_has_participant(&state, &room_id, &to).await =>
+                            {
+                                let _ = sender.send(MeetingServerFrame::Signal {
+                                    from: participant_id.clone(),
+                                    to,
+                                    ciphertext,
+                                });
+                            }
+                            Ok(MeetingClientFrame::Ping) => {
+                                if send_meeting_frame(&mut socket, &MeetingServerFrame::Pong).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(MeetingClientFrame::Leave) => break,
+                            _ => {
+                                if send_meeting_frame(
+                                    &mut socket,
+                                    &MeetingServerFrame::Error {
+                                        code: "invalid_frame",
+                                        message: "The meeting frame is invalid or its recipient is unavailable.".into(),
+                                    },
+                                ).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        if socket.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
+            outgoing = receiver.recv() => {
+                match outgoing {
+                    Ok(frame) => {
+                        let addressed_elsewhere = matches!(
+                            &frame,
+                            MeetingServerFrame::Signal { to, .. } if to != &participant_id
+                        );
+                        if !addressed_elsewhere && send_meeting_frame(&mut socket, &frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = send_meeting_frame(
+                            &mut socket,
+                            &MeetingServerFrame::Error {
+                                code: "signal_lagged",
+                                message: "Meeting signaling fell behind; reconnect to resynchronize.".into(),
+                            },
+                        ).await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+
+    remove_meeting_participant(&state, &room_id, &participant_id).await;
+    let _ = sender.send(MeetingServerFrame::ParticipantLeft { participant_id });
+}
+
+async fn send_meeting_frame(
+    socket: &mut WebSocket,
+    frame: &MeetingServerFrame,
+) -> Result<(), axum::Error> {
+    let encoded = serde_json::to_string(frame).expect("meeting server frame should serialize");
+    socket.send(Message::Text(encoded.into())).await
+}
+
+async fn meeting_has_participant(
+    state: &GatewayState,
+    room_id: &str,
+    participant_id: &str,
+) -> bool {
+    state
+        .meeting_rooms
+        .lock()
+        .await
+        .get(room_id)
+        .is_some_and(|room| room.participants.contains(participant_id))
+}
+
+async fn remove_meeting_participant(state: &GatewayState, room_id: &str, participant_id: &str) {
+    let mut rooms = state.meeting_rooms.lock().await;
+    let should_remove = if let Some(room) = rooms.get_mut(room_id) {
+        room.participants.remove(participant_id);
+        room.participants.is_empty()
+    } else {
+        false
+    };
+    if should_remove {
+        rooms.remove(room_id);
+    }
+}
+
+fn authorize_meeting_capability(
+    access_token: &str,
+    room_id: &str,
+    participant_id: &str,
+    config: &GatewayConfig,
+) -> Result<AccessClaims, ApiError> {
+    if !valid_participant_id(participant_id) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_participant_id",
+            "Meeting participant IDs must contain 8-128 URL-safe characters",
+        ));
+    }
+    let claims = verify_access_token(access_token, &config.hmac_secret)
+        .map_err(|message| ApiError::new(StatusCode::UNAUTHORIZED, "invalid_token", message))?;
+    if !meeting_claims_allow_room(&claims, room_id) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "wrong_meeting",
+            "This invitation cannot join the requested meeting",
+        ));
+    }
+    Ok(claims)
+}
+
+fn meeting_claims_allow_room(claims: &AccessClaims, room_id: &str) -> bool {
+    claims.permissions.iter().any(|scope| scope == "meeting")
+        && claims.sub.starts_with(&format!("meeting:{room_id}:"))
+}
+
+fn valid_participant_id(participant_id: &str) -> bool {
+    (8..=128).contains(&participant_id.len())
+        && participant_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn valid_meeting_ciphertext(ciphertext: &str) -> bool {
+    (16..=MAX_MEETING_SIGNAL_BYTES).contains(&ciphertext.len())
+        && ciphertext
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn validate_meeting_origin(headers: &HeaderMap, config: &GatewayConfig) -> Result<(), ApiError> {
+    let origin = headers
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::FORBIDDEN,
+                "origin_required",
+                "Meeting WebSocket connections require an allowed browser origin",
+            )
+        })?;
+    let explicitly_allowed = config
+        .allowed_origins
+        .iter()
+        .any(|allowed| allowed.as_bytes() == origin.as_bytes());
+    let loopback_development = config.allowed_origins.is_empty()
+        && reqwest::Url::parse(origin)
+            .ok()
+            .and_then(|url| url.host_str().map(is_loopback_host))
+            .unwrap_or(false);
+    if !explicitly_allowed && !loopback_development {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "origin_not_allowed",
+            "The browser origin is not allowed for meeting signaling",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_meeting_room(room_id: &str, room_name: &str) -> Result<(), ApiError> {
+    if !(8..=64).contains(&room_id.len())
+        || !room_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_room_id",
+            "Meeting room IDs must contain 8-64 URL-safe characters",
+        ));
+    }
+    let room_name = room_name.trim();
+    if room_name.is_empty()
+        || room_name.chars().count() > 80
+        || room_name.chars().any(char::is_control)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_room_name",
+            "Meeting room names must contain 1-80 visible characters",
+        ));
+    }
+    Ok(())
 }
 
 fn mint_turn_credential(
@@ -504,12 +1158,42 @@ fn verify_access_token(token: &str, secret: &[u8]) -> Result<AccessClaims, Strin
     Ok(claims)
 }
 
+fn sign_access_token(claims: &AccessClaims, secret: &[u8]) -> Result<String, ApiError> {
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "token_encoding_failed",
+            "Meeting invitation could not be encoded",
+        )
+    })?);
+    let unsigned = format!("v1.{payload}");
+    let mut mac = HmacSha256::new_from_slice(secret).map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "token_signing_failed",
+            "Meeting invitation signing is unavailable",
+        )
+    })?;
+    mac.update(unsigned.as_bytes());
+    Ok(format!(
+        "{unsigned}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    ))
+}
+
 fn authorize_contract(
     claims: &AccessClaims,
     contract_key: &str,
     config: &GatewayConfig,
 ) -> Result<(), ApiError> {
-    if !config.allowed_contracts.contains(contract_key) {
+    let upstream = config.upstream.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "contract_gateway_disabled",
+            "This gateway exposes meeting services only",
+        )
+    })?;
+    if !upstream.allowed_contracts.contains(contract_key) {
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,
             "contract_not_allowed",
@@ -560,6 +1244,31 @@ fn enforce_rate_limits(state: &GatewayState, subject: &str, ip: IpAddr) -> Resul
         ));
     }
     Ok(())
+}
+
+fn client_ip(
+    headers: &HeaderMap,
+    remote: SocketAddr,
+    trust_proxy_headers: bool,
+) -> Result<IpAddr, ApiError> {
+    if !trust_proxy_headers {
+        return Ok(remote.ip());
+    }
+    let forwarded = headers
+        .get(FORWARDED_FOR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 256)
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_forwarded_address",
+                "The trusted proxy did not provide a valid client address",
+            )
+        })?;
+    Ok(forwarded)
 }
 
 fn take_token(
@@ -804,15 +1513,19 @@ async fn forward_update(
     update: &UpdateRequest,
     _validated_payload: Vec<u8>,
 ) -> Result<(), ApiError> {
+    let upstream = state.config.upstream.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upstream_disabled",
+            "Freenet upstream access is disabled",
+        )
+    })?;
     let response = timeout(
         UPSTREAM_TIMEOUT,
         state
             .client
-            .post(format!(
-                "{}/contracts/{contract_key}/updates",
-                state.config.upstream_url
-            ))
-            .bearer_auth(state.config.upstream_token.as_ref())
+            .post(format!("{}/contracts/{contract_key}/updates", upstream.url))
+            .bearer_auth(upstream.token.as_ref())
             .header(
                 IDEMPOTENCY_HEADER,
                 headers
@@ -849,10 +1562,17 @@ async fn forward_update(
 
 fn router(state: Arc<GatewayState>) -> Router {
     let origins = state.config.allowed_origins.clone();
-    Router::new()
+    let expose_contract_updates = state.config.upstream.is_some();
+    let web_static_dir = state.config.web_static_dir.clone();
+    let router = Router::new()
         .route("/nexus/v1/health", get(health))
-        .route("/nexus/v1/contracts/{key}/updates", post(submit_update))
         .route("/nexus/v1/turn-credentials", post(issue_turn_credential))
+        .route(
+            "/nexus/v1/meeting-host-sessions",
+            post(issue_meeting_host_session),
+        )
+        .route("/nexus/v1/meeting-invites", post(issue_meeting_invite))
+        .route("/nexus/v1/meetings/{room_id}", get(meeting_websocket))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
@@ -872,8 +1592,18 @@ fn router(state: Arc<GatewayState>) -> Router {
                 ]),
         )
         .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .layer(TraceLayer::new_for_http());
+    let router = if expose_contract_updates {
+        router.route("/nexus/v1/contracts/{key}/updates", post(submit_update))
+    } else {
+        router
+    };
+    let router = if let Some(directory) = web_static_dir {
+        router.fallback_service(ServeDir::new(directory).append_index_html_on_directories(true))
+    } else {
+        router
+    };
+    router.with_state(state)
 }
 
 fn request_id() -> String {
@@ -910,6 +1640,7 @@ async fn main() {
             .expect("failed to create the gateway upstream client"),
         rates: StdMutex::new(HashMap::new()),
         idempotency: Mutex::new(idempotency),
+        meeting_rooms: Mutex::new(HashMap::new()),
         upstream_slots: Semaphore::new(32),
     });
     let listener = tokio::net::TcpListener::bind(address)
@@ -967,6 +1698,42 @@ mod tests {
             ..claims
         });
         assert!(verify_access_token(&expired, SECRET).is_err());
+    }
+
+    #[test]
+    fn meeting_invites_are_gateway_signed_and_room_bound() {
+        validate_meeting_room("01MEETINGROOM", "Café planning").unwrap();
+        assert!(validate_meeting_room("short", "Café planning").is_err());
+        assert!(validate_meeting_room("01MEETINGROOM", "\n").is_err());
+
+        let claims = AccessClaims {
+            sub: "meeting:01MEETINGROOM:random".into(),
+            exp: unix_time() + 300,
+            permissions: vec!["meeting".into(), "turn".into()],
+            contracts: Vec::new(),
+        };
+        let token = sign_access_token(&claims, SECRET).unwrap();
+        let decoded = verify_access_token(&token, SECRET).unwrap();
+        assert_eq!(decoded.sub, claims.sub);
+        assert!(decoded.permissions.iter().any(|scope| scope == "meeting"));
+        assert!(decoded.permissions.iter().any(|scope| scope == "turn"));
+        assert!(meeting_claims_allow_room(&decoded, "01MEETINGROOM"));
+        assert!(!meeting_claims_allow_room(&decoded, "01OTHERMEETING"));
+        assert!(valid_participant_id("01PARTICIPANT"));
+        assert!(!valid_participant_id("bad id"));
+        assert!(valid_meeting_ciphertext("abcdefghijklmnop"));
+        assert!(!valid_meeting_ciphertext("not+base64url!!!!"));
+    }
+
+    #[test]
+    fn meeting_host_secret_comparison_is_exact() {
+        let expected = b"host-passphrase-that-is-long-enough-123";
+        assert!(meeting_host_secret_matches(expected, expected));
+        assert!(!meeting_host_secret_matches(
+            expected,
+            b"host-passphrase-that-is-long-enough-124"
+        ));
+        assert!(!meeting_host_secret_matches(expected, b"short"));
     }
 
     #[test]
@@ -1038,6 +1805,48 @@ mod tests {
         assert!(validate_upstream_url("http://localhost:9000").is_ok());
         assert!(validate_upstream_url("https://core.example").is_ok());
         assert!(validate_upstream_url("http://core.example").is_err());
+    }
+
+    #[test]
+    fn gateway_flags_are_explicit() {
+        unsafe {
+            std::env::set_var("NEXUS_TEST_GATEWAY_FLAG", "true");
+        }
+        assert!(env_flag("NEXUS_TEST_GATEWAY_FLAG", false).unwrap());
+        unsafe {
+            std::env::set_var("NEXUS_TEST_GATEWAY_FLAG", "0");
+        }
+        assert!(!env_flag("NEXUS_TEST_GATEWAY_FLAG", true).unwrap());
+        unsafe {
+            std::env::set_var("NEXUS_TEST_GATEWAY_FLAG", "maybe");
+        }
+        assert!(env_flag("NEXUS_TEST_GATEWAY_FLAG", false).is_err());
+        unsafe {
+            std::env::remove_var("NEXUS_TEST_GATEWAY_FLAG");
+        }
+    }
+
+    #[test]
+    fn proxy_client_addresses_are_used_only_when_explicitly_trusted() {
+        let remote: SocketAddr = "172.18.0.4:50000".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(FORWARDED_FOR_HEADER),
+            HeaderValue::from_static("203.0.113.25"),
+        );
+        assert_eq!(
+            client_ip(&headers, remote, false).unwrap(),
+            "172.18.0.4".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            client_ip(&headers, remote, true).unwrap(),
+            "203.0.113.25".parse::<IpAddr>().unwrap()
+        );
+        headers.insert(
+            HeaderName::from_static(FORWARDED_FOR_HEADER),
+            HeaderValue::from_static("not-an-address"),
+        );
+        assert!(client_ip(&headers, remote, true).is_err());
     }
 
     #[tokio::test]
