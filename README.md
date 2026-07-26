@@ -12,6 +12,10 @@ The clients share protocol types, identity and cryptography services, sync
 logic, WebRTC utilities, and branding tokens. They deliberately do not share
 their page layouts.
 
+Freenet nodes and contracts remain authoritative; Nexus does not require a
+central application server. The optional web gateway and TURN service are
+non-authoritative edge helpers for browsers and difficult WebRTC network paths.
+
 ## Project status
 
 Phase 0 research and architecture are complete against Freenet Core

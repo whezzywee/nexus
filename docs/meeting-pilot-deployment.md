@@ -1,13 +1,22 @@
 # Private meeting pilot deployment
 
 This runbook deploys the phone-friendly Nexus meeting surface, encrypted
-signaling gateway, and TURN relay on one public Linux host. It deliberately
-runs the gateway in `meeting-only` mode and does not claim to deploy the full
-Nexus/Freenet messenger.
+rendezvous gateway, and optional TURN relay on one publicly reachable Linux
+host. It deliberately runs the gateway in `meeting-only` mode and does not
+claim to deploy the full Nexus/Freenet messenger.
+
+Freenet messaging does not require this host. Freenet contracts and the
+participating nodes remain authoritative. The meeting edge exists only because
+ordinary phone browsers need a reachable place to download the static page,
+exchange encrypted WebRTC connection setup, and—when direct peer-to-peer
+connectivity is blocked—relay already-encrypted media through TURN. It stores
+no canonical messages, identities, room keys, or decrypted media.
 
 ## Required infrastructure
 
-- One public Linux x64 or arm64 server with Docker Engine and Docker Compose.
+- One publicly reachable Linux x64 or arm64 machine with Docker Engine and
+  Docker Compose. This may be the operator's own always-on machine, a home
+  server with port forwarding, or a VPS; it is not a central Nexus authority.
 - Two DNS records pointing to its public address:
   - `meet.example.com` for HTTPS/WSS;
   - `relay.example.com` for TURN.
