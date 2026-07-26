@@ -1,0 +1,83 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildMeetingUrl,
+  createMeetingInvite,
+  MEETING_FRAGMENT_KEY,
+  type MeetingInvite,
+  parseMeetingUrl,
+} from "./meeting-links";
+
+const now = 1_800_000_000_000;
+const invite: MeetingInvite = {
+  version: 1,
+  roomId: "01MEETINGROOM",
+  roomName: "The observatory",
+  accessToken: "v1.eyJyb29tIjoiMDEifQ.signature",
+  roomKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  expiresAt: now + 3_600_000,
+};
+
+describe("meeting links", () => {
+  it("keeps the invitation in the fragment and round-trips unicode names", () => {
+    const link = buildMeetingUrl(
+      new URL("https://meet.nexus.example/app?private=discarded#old"),
+      { ...invite, roomName: "Café planning" },
+      now,
+    );
+
+    expect(link.search).toBe("");
+    expect(link.hash).toContain(MEETING_FRAGMENT_KEY);
+    expect(link.href).not.toContain(invite.accessToken);
+    expect(parseMeetingUrl(link, now)).toEqual({ ...invite, roomName: "Café planning" });
+  });
+
+  it("rejects expired, malformed, and insecure public links", () => {
+    expect(() =>
+      buildMeetingUrl(new URL("http://meet.example"), { ...invite, expiresAt: now - 1 }, now),
+    ).toThrow();
+    expect(() => parseMeetingUrl(new URL("https://meet.example/#nexus-meeting=%%%"), now)).toThrow(
+      "malformed",
+    );
+    expect(() => buildMeetingUrl(new URL("http://meet.example"), invite, now)).toThrow("HTTPS");
+  });
+
+  it("allows loopback links for development", () => {
+    expect(buildMeetingUrl(new URL("http://127.0.0.1:5173"), invite, now).origin).toBe(
+      "http://127.0.0.1:5173",
+    );
+  });
+
+  it("mints a bounded gateway invitation", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          roomId: invite.roomId,
+          roomName: invite.roomName,
+          accessToken: invite.accessToken,
+          expiresAt: invite.expiresAt,
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      createMeetingInvite(
+        new URL("https://gateway.example/nexus/v1/meeting-invites"),
+        "Bearer host-token",
+        invite,
+        now,
+      ),
+    ).resolves.toEqual({
+      ...invite,
+      roomKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ authorization: "Bearer host-token" }),
+      }),
+    );
+    fetcher.mockRestore();
+  });
+});

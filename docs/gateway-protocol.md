@@ -62,6 +62,8 @@ The implemented HTTP surface is:
 GET  /nexus/v1/health
 POST /nexus/v1/contracts/{key}/updates
 POST /nexus/v1/turn-credentials
+POST /nexus/v1/meeting-invites
+GET  /nexus/v1/meetings/{room-id}  (WebSocket upgrade)
 ```
 
 `POST /updates` requires:
@@ -88,6 +90,23 @@ returns the original result; reusing an ID with different bytes is rejected.
 TURN REST username/password plus configured `turn:`/`turns:` URLs. Responses
 are never cacheable. The shared relay secret remains operator-only; see
 [Production TURN operations](turn-operations.md).
+
+`POST /meeting-invites` requires the `meeting` permission and accepts a bounded
+URL-safe room ID plus a human-readable room name. It returns a gateway-signed,
+time-limited capability with `meeting` and `turn` permissions. The web client
+places that capability inside the URL fragment, so normal page requests,
+referrer headers, reverse-proxy request targets, and static-host logs do not
+receive it. The link is still a bearer capability: anyone who receives it can
+join until it expires, so clients must not upload it to analytics or diagnostics.
+
+`GET /meetings/{room-id}` upgrades to a bounded small-room WebSocket. The first
+client frame carries the invitation capability and a fresh participant/device
+ID; the capability must be unexpired, have `meeting` permission, and be bound
+to the room in the path. The gateway caps rooms at six participants and relays
+only URL-safe encrypted signal payloads to an online recipient. Offers,
+answers, and ICE candidates are AES-256-GCM encrypted in the browser with a
+room key held only in the URL fragment. The capability and encryption key are
+never placed in the WebSocket URL.
 
 ## Subscription stream
 

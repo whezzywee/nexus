@@ -1,6 +1,24 @@
 import { type LocalIdentity, signDevicePayload, verifyDevicePayload } from "@nexus/identity";
 import { concatBytes, type DeviceCertificate } from "@nexus/protocol";
 
+export {
+  buildMeetingUrl,
+  createMeetingInvite,
+  MEETING_FRAGMENT_KEY,
+  MEETING_LINK_VERSION,
+  type MeetingInvite,
+  parseMeetingUrl,
+  validateMeetingInvite,
+} from "./meeting-links";
+export {
+  importRoomKey,
+  type MeetingSignal,
+  MeetingSignalingClient,
+  type MeetingSignalingEvents,
+  type MeetingSignalingOptions,
+  meetingWebSocketUrl,
+} from "./meeting-signaling";
+
 export type MediaSlot = "microphone" | "camera" | "screen";
 
 export interface CallSession {
@@ -81,6 +99,7 @@ export interface MediaRouterEvents {
   onIceCandidate(signal: IceSignal): void;
   onRemoteTrack(peerId: string, event: RTCTrackEvent): void;
   onConnectionState(peerId: string, state: RTCPeerConnectionState): void;
+  onNegotiationNeeded?(peerId: string): void;
 }
 
 export type CallSignalType = "offer" | "answer" | "ice" | "leave";
@@ -202,6 +221,7 @@ function canonicalCallSignalBytes(envelope: UnsignedCallSignalEnvelope): Uint8Ar
 export interface MediaRouter {
   join(session: CallSession): Promise<void>;
   addParticipant(peer: PeerDescriptor): Promise<void>;
+  removeParticipant(peerId: string): Promise<void>;
   createOffer(peerId: string): Promise<RTCSessionDescriptionInit>;
   receiveDescription(peerId: string, description: RTCSessionDescriptionInit): Promise<void>;
   receiveIceCandidate(peerId: string, candidate: RTCIceCandidateInit): Promise<void>;
@@ -213,6 +233,7 @@ export interface MediaRouter {
 interface PeerState {
   connection: RTCPeerConnection;
   senders: Map<MediaSlot, RTCRtpSender>;
+  controlChannel?: RTCDataChannel;
 }
 
 export class MeshMediaRouter implements MediaRouter {
@@ -239,6 +260,15 @@ export class MeshMediaRouter implements MediaRouter {
     }
     const connection = new RTCPeerConnection({ iceServers: session.iceServers });
     const state: PeerState = { connection, senders: new Map() };
+    connection.onnegotiationneeded = () => this.events.onNegotiationNeeded?.(peer.peerId);
+    if (session.localPeerId.localeCompare(peer.peerId) < 0) {
+      state.controlChannel = connection.createDataChannel("nexus-control", {
+        ordered: true,
+      });
+    }
+    connection.ondatachannel = (event) => {
+      state.controlChannel = event.channel;
+    };
     connection.onicecandidate = (event) => {
       if (event.candidate) {
         this.events.onIceCandidate({
@@ -254,6 +284,13 @@ export class MeshMediaRouter implements MediaRouter {
       state.senders.set(slot, connection.addTrack(track));
     }
     this.peers.set(peer.peerId, state);
+  }
+
+  async removeParticipant(peerId: string): Promise<void> {
+    const state = this.peers.get(peerId);
+    if (!state) return;
+    state.connection.close();
+    this.peers.delete(peerId);
   }
 
   async createOffer(peerId: string): Promise<RTCSessionDescriptionInit> {

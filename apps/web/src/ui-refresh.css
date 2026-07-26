@@ -197,6 +197,93 @@ body {
   line-height: 1.45;
 }
 
+.meeting-link-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #3c4666;
+  border-radius: 8px;
+  color: #d9def7;
+  background: #202638;
+}
+
+.meeting-link-status div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.meeting-link-status strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-link-status span {
+  color: #afb7d6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.meeting-stage {
+  margin: 10px 12px 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.meeting-tile,
+.meeting-empty {
+  min-height: 112px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid #333740;
+  border-radius: 8px;
+  background: #141519;
+}
+
+.meeting-tile video {
+  width: 100%;
+  height: 100%;
+  min-height: 112px;
+  display: block;
+  object-fit: cover;
+  background: #0b0c0f;
+}
+
+.meeting-tile > span {
+  position: absolute;
+  bottom: 7px;
+  left: 7px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #f3f4f5;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 10px;
+}
+
+.meeting-empty {
+  padding: 18px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 4px;
+  color: #c8ccd3;
+  text-align: center;
+}
+
+.meeting-empty strong {
+  font-size: 13px;
+}
+
+.meeting-empty span {
+  color: #8f96a3;
+  font-size: 10px;
+}
+
 .call-dock {
   margin-inline: 12px;
   padding: 7px 8px;
@@ -313,13 +400,20 @@ body {
     padding-inline: 8px 4px;
   }
 
-  .call-dock select {
-    min-width: 0;
-  }
-
   .call-dock {
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .meeting-shell-active {
+    margin-bottom: calc(130px + env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column-reverse;
+  }
+
+  .call-dock select,
+  .peer-switcher {
+    display: none;
   }
 
   .call-dock > div {
@@ -349,15 +443,5 @@ body {
   .call-dock > button:nth-of-type(5) {
     grid-column: 5 / 7;
     grid-row: 2;
-  }
-
-  .call-dock > select:nth-of-type(1) {
-    grid-column: 1 / 4;
-    grid-row: 3;
-  }
-
-  .call-dock > select:nth-of-type(2) {
-    grid-column: 4 / 7;
-    grid-row: 3;
   }
 }

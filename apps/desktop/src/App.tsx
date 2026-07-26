@@ -19,7 +19,14 @@ import {
 } from "@nexus/client-react";
 import type { DisplayMessage } from "@nexus/protocol";
 import type { ChatSnapshot } from "@nexus/sync-engine";
-import { fetchTurnCredential, MeshMediaRouter, turnIceServer } from "@nexus/webrtc";
+import {
+  buildMeetingUrl,
+  createMeetingInvite,
+  fetchTurnCredential,
+  type MeetingInvite,
+  MeshMediaRouter,
+  turnIceServer,
+} from "@nexus/webrtc";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
@@ -136,6 +143,8 @@ export function App() {
   const [screenActive, setScreenActive] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [callRoute, setCallRoute] = useState("Waiting for peers");
+  const [meetingInvite, setMeetingInvite] = useState<MeetingInvite | null>(null);
+  const [meetingShareStatus, setMeetingShareStatus] = useState<string | null>(null);
   const [mediaDevices, setMediaDevices] = useState<MediaDeviceInfo[]>([]);
   const [microphoneId, setMicrophoneId] = useState("");
   const [cameraId, setCameraId] = useState("");
@@ -600,6 +609,45 @@ export function App() {
     setCallError(null);
   }
 
+  async function shareMeeting() {
+    try {
+      const activeRuntime = runtime;
+      if (!activeRuntime) {
+        throw new Error("The meeting room is still loading.");
+      }
+      const inviteEndpoint = import.meta.env.VITE_NEXUS_MEETING_INVITE_URL as string | undefined;
+      const publicAppUrl = import.meta.env.VITE_NEXUS_WEB_APP_URL as string | undefined;
+      const hostAuthorization = (
+        import.meta.env.VITE_NEXUS_MEETING_HOST_AUTHORIZATION ||
+        (import.meta.env.VITE_NEXUS_AUTH_TOKEN
+          ? `Bearer ${import.meta.env.VITE_NEXUS_AUTH_TOKEN}`
+          : "")
+      ).trim();
+      if (!publicAppUrl) {
+        throw new Error("The public Nexus Web address is not configured.");
+      }
+      let invite = meetingInvite;
+      if (!invite) {
+        if (!inviteEndpoint) {
+          throw new Error("Meeting invitations are not configured on this client.");
+        }
+        invite = await createMeetingInvite(new URL(inviteEndpoint), hostAuthorization, {
+          roomId: activeRuntime.channelId,
+          roomName: "The observatory",
+        });
+        setMeetingInvite(invite);
+      }
+      const link = buildMeetingUrl(new URL(publicAppUrl), invite);
+      await navigator.clipboard.writeText(link.toString());
+      setMeetingShareStatus("Meeting link copied");
+      setCallError(null);
+    } catch (error) {
+      setCallError(
+        error instanceof Error ? error.message : "The meeting link could not be copied.",
+      );
+    }
+  }
+
   async function toggleMicrophone() {
     try {
       if (!callJoined) await joinCall();
@@ -990,7 +1038,13 @@ export function App() {
             >
               <Bell size={17} />
             </button>
-            <button type="button" className="quiet-button" aria-label="Invite people">
+            <button
+              type="button"
+              className="quiet-button"
+              aria-label="Copy meeting invitation"
+              title={meetingShareStatus ?? "Copy meeting invitation"}
+              onClick={() => void shareMeeting()}
+            >
               <UserPlus size={17} />
             </button>
             <button
