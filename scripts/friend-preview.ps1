@@ -63,6 +63,15 @@ function Get-OrCreateSecret {
     return $secret
 }
 
+function Convert-ToBase64Url {
+    param(
+        [Parameter(Mandatory)]
+        [byte[]]$Bytes
+    )
+
+    return [Convert]::ToBase64String($Bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+}
+
 $cloudflaredCandidates = @(
     (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\cloudflared.exe"),
     (Join-Path $env:ProgramFiles "cloudflared\cloudflared.exe"),
@@ -199,6 +208,38 @@ if (-not $ready) {
     throw "The meeting gateway did not become ready. See $gatewayError"
 }
 
+$hostSession = Invoke-RestMethod `
+    -Uri "http://127.0.0.1:$Port/nexus/v1/meeting-host-sessions" `
+    -Method Post `
+    -Headers @{ Authorization = "Nexus-Host $hostSecret" } `
+    -TimeoutSec 10
+$roomId = "room-$([Guid]::NewGuid().ToString('N'))"
+$invite = Invoke-RestMethod `
+    -Uri "http://127.0.0.1:$Port/nexus/v1/meeting-invites" `
+    -Method Post `
+    -Headers @{ Authorization = "Bearer $($hostSession.accessToken)" } `
+    -ContentType "application/json" `
+    -Body (@{ roomId = $roomId; roomName = "Friends meeting" } | ConvertTo-Json -Compress) `
+    -TimeoutSec 10
+$roomKeyBytes = New-Object byte[] 32
+$roomKeyGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $roomKeyGenerator.GetBytes($roomKeyBytes)
+} finally {
+    $roomKeyGenerator.Dispose()
+}
+$meetingCapability = [ordered]@{
+    version = 1
+    roomId = $invite.roomId
+    roomName = $invite.roomName
+    accessToken = $invite.accessToken
+    roomKey = Convert-ToBase64Url -Bytes $roomKeyBytes
+    expiresAt = [long]$invite.expiresAt
+}
+$meetingPayload = $meetingCapability | ConvertTo-Json -Compress
+$meetingFragment = Convert-ToBase64Url -Bytes ([Text.Encoding]::UTF8.GetBytes($meetingPayload))
+$meetingUrl = "$publicUrl/#nexus-meeting=$meetingFragment"
+
 $session = [ordered]@{
     publicUrl = $publicUrl
     gatewayPid = $gateway.Id
@@ -215,12 +256,12 @@ $session = [ordered]@{
 Write-Host ""
 Write-Host "Nexus friend preview is ready." -ForegroundColor Green
 Write-Host "Public page: $publicUrl"
-Write-Host "Private host passphrase: $hostSecret"
+Write-Host "Meeting link to share: $meetingUrl"
+Write-Host "Private host passphrase for creating another link: $hostSecret"
 Write-Host ""
-Write-Host "Keep the passphrase private. Open the page, choose Share link, enter it once,"
-Write-Host "then share only the generated meeting link with friends."
+Write-Host "Share only the meeting link. Keep the host passphrase private."
 Write-Host "Your computer must stay online. Stop the preview with: pnpm friend:stop"
 Write-Host "This temporary tunnel has no uptime guarantee and uses direct WebRTC/STUN;"
 Write-Host "some restrictive networks still require the optional TURN deployment."
 
-Start-Process $publicUrl
+Start-Process $meetingUrl

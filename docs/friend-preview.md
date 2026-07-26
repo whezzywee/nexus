@@ -26,11 +26,12 @@ The command:
    `.runtime` storage;
 3. obtains a temporary `https://…trycloudflare.com` URL;
 4. starts the local gateway with only that public origin allowed;
-5. opens the meeting page and prints the private host passphrase.
+5. mints a 24-hour encrypted meeting capability locally;
+6. opens and prints the actual fragment-only meeting link.
 
-Choose **Share link**, enter the host passphrase once, then choose **Share
-link** again. Send friends only the generated meeting link, never the host
-passphrase.
+Send friends only the printed meeting link, never the host passphrase. The
+passphrase is also printed so the host can create another room later through
+the page's **Share link** control.
 
 Stop both background processes with:
 
