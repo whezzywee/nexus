@@ -1,0 +1,64 @@
+name: Meeting network smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-phone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      AGENT_BROWSER_ARGS: --use-fake-device-for-media-stream,--use-fake-ui-for-media-stream
+      AGENT_BROWSER_DEFAULT_TIMEOUT: "300000"
+      AGENT_BROWSER_SESSION: nexus-remote-phone
+      NEXUS_MEETING_SMOKE_URL: ${{ secrets.NEXUS_MEETING_SMOKE_URL }}
+    steps:
+      - name: Validate the one-time invitation
+        shell: bash
+        run: |
+          if [[ "${NEXUS_MEETING_SMOKE_URL}" != https://*"#nexus-meeting="* ]]; then
+            echo "NEXUS_MEETING_SMOKE_URL is missing or is not a Nexus HTTPS invitation." >&2
+            exit 2
+          fi
+
+      - name: Install the pinned browser runner
+        shell: bash
+        run: |
+          npm install --global agent-browser@0.33.0
+          agent-browser install --with-deps
+
+      - name: Join as an independent-network phone
+        shell: bash
+        run: |
+          mkdir -p meeting-smoke-evidence
+          agent-browser open "${NEXUS_MEETING_SMOKE_URL}" >/dev/null
+          agent-browser set viewport 390 844
+          agent-browser wait --text "Ready for Friends meeting"
+          agent-browser find role button click --name "Join"
+          agent-browser wait --text "Waiting for friends"
+          agent-browser find role button click --name "Mic"
+          agent-browser find role button click --name "Camera"
+          agent-browser wait --fn \
+            "Array.from(document.querySelectorAll('video')).some((video) => { const tracks = video.srcObject?.getTracks?.() ?? []; return tracks.some((track) => track.kind === 'audio' && track.readyState === 'live') && tracks.some((track) => track.kind === 'video' && track.readyState === 'live'); })"
+          evidence_script="(() => { const videos = Array.from(document.querySelectorAll('video')); const tracks = videos.flatMap((video) => video.srcObject?.getTracks?.() ?? []); return { checkedAt: new Date().toISOString(), secureContext: window.isSecureContext, viewportWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, participantTiles: document.querySelectorAll('.meeting-page-tile').length, remoteLiveAudioTracks: tracks.filter((track) => track.kind === 'audio' && track.readyState === 'live').length, remoteLiveVideoTracks: tracks.filter((track) => track.kind === 'video' && track.readyState === 'live').length }; })()"
+          encoded_script="$(printf '%s' "${evidence_script}" | base64 -w 0)"
+          agent-browser eval --base64 "${encoded_script}" \
+            > meeting-smoke-evidence/remote-phone.json
+          agent-browser screenshot meeting-smoke-evidence/remote-phone.png
+
+      - name: Close the disposable browser
+        if: always()
+        shell: bash
+        run: agent-browser close || true
+
+      - name: Preserve independent-network evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: meeting-network-smoke-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: meeting-smoke-evidence/
