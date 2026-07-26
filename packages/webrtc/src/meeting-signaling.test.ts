@@ -119,4 +119,78 @@ describe("meeting signaling", () => {
       expect(handled).toEqual(["start:first", "finish:first", "start:second", "finish:second"]);
     });
   });
+
+  it("serializes encryption so signal sequence and wire order cannot diverge", async () => {
+    const socket = new FakeMeetingSocket();
+    let socketCreated!: () => void;
+    const socketObserved = new Promise<void>((resolve) => {
+      socketCreated = resolve;
+    });
+    const client = new MeetingSignalingClient({
+      endpoint: new URL("https://gateway.example/nexus/v1/meetings"),
+      invite: {
+        version: 1,
+        roomId: "01MEETINGROOM",
+        roomName: "Friends meeting",
+        accessToken: "v1.test.signature",
+        roomKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        expiresAt: Date.now() + 60_000,
+      },
+      participantId: "phone-local",
+      events: {
+        onReady: vi.fn(),
+        onParticipantJoined: vi.fn(),
+        onParticipantLeft: vi.fn(),
+        onSignal: vi.fn(),
+        onError: vi.fn(),
+        onDisconnected: vi.fn(),
+      },
+      socketFactory: () => {
+        socketCreated();
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    const connected = client.connect();
+    await socketObserved;
+    socket.open();
+    socket.message({ type: "ready", participants: [] });
+    await connected;
+
+    let releaseFirst!: () => void;
+    const firstPaused = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstObserved = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const sent: string[] = [];
+    const internals = client as unknown as {
+      encryptAndSend(recipientId: string, signal: { type: "leave" }): Promise<void>;
+    };
+    internals.encryptAndSend = async (recipientId) => {
+      sent.push(`start:${recipientId}`);
+      if (recipientId === "phone-first") {
+        firstStarted();
+        await firstPaused;
+      }
+      sent.push(`finish:${recipientId}`);
+    };
+
+    const first = client.sendSignal("phone-first", { type: "leave" });
+    await firstObserved;
+    const second = client.sendSignal("phone-second", { type: "leave" });
+    await Promise.resolve();
+    expect(sent).toEqual(["start:phone-first"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(sent).toEqual([
+      "start:phone-first",
+      "finish:phone-first",
+      "start:phone-second",
+      "finish:phone-second",
+    ]);
+  });
 });

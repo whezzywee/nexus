@@ -48,6 +48,7 @@ export class MeetingSignalingClient {
   private sendSequence = 0;
   private readonly receiveSequences = new Map<string, number>();
   private incomingMessages = Promise.resolve();
+  private outgoingSignals = Promise.resolve();
   private intentionallyClosed = false;
 
   constructor(private readonly options: MeetingSignalingOptions) {}
@@ -62,7 +63,10 @@ export class MeetingSignalingClient {
     const socket = this.options.socketFactory?.(socketUrl) ?? new WebSocket(socketUrl);
     this.socket = socket;
     this.intentionallyClosed = false;
+    this.sendSequence = 0;
+    this.receiveSequences.clear();
     this.incomingMessages = Promise.resolve();
+    this.outgoingSignals = Promise.resolve();
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -128,7 +132,13 @@ export class MeetingSignalingClient {
     });
   }
 
-  async sendSignal(recipientId: string, signal: MeetingSignal): Promise<void> {
+  sendSignal(recipientId: string, signal: MeetingSignal): Promise<void> {
+    const pending = this.outgoingSignals.then(() => this.encryptAndSend(recipientId, signal));
+    this.outgoingSignals = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async encryptAndSend(recipientId: string, signal: MeetingSignal): Promise<void> {
     const socket = this.requireSocket();
     const key = this.requireKey();
     this.sendSequence += 1;
