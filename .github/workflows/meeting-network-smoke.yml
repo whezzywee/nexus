@@ -46,12 +46,15 @@ jobs:
           agent-browser find role button click --name "Mic"
           agent-browser find role button click --name "Camera"
           agent-browser wait --fn \
+            "Array.from(document.querySelectorAll('button[aria-pressed=true]')).some((button) => button.textContent?.includes('Mute')) && Array.from(document.querySelectorAll('button[aria-pressed=true]')).some((button) => button.textContent?.includes('Stop video'))"
+          agent-browser wait --fn \
             "Array.from(document.querySelectorAll('video')).some((video) => { const tracks = video.srcObject?.getTracks?.() ?? []; return tracks.some((track) => track.kind === 'audio' && track.readyState === 'live') && tracks.some((track) => track.kind === 'video' && track.readyState === 'live'); })"
           evidence_script="(() => { const videos = Array.from(document.querySelectorAll('video')); const tracks = videos.flatMap((video) => video.srcObject?.getTracks?.() ?? []); return { checkedAt: new Date().toISOString(), secureContext: window.isSecureContext, viewportWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, participantTiles: document.querySelectorAll('.meeting-page-tile').length, remoteLiveAudioTracks: tracks.filter((track) => track.kind === 'audio' && track.readyState === 'live').length, remoteLiveVideoTracks: tracks.filter((track) => track.kind === 'video' && track.readyState === 'live').length }; })()"
           encoded_script="$(printf '%s' "${evidence_script}" | base64 -w 0)"
           agent-browser eval --base64 "${encoded_script}" \
             > meeting-smoke-evidence/remote-phone.json
           agent-browser screenshot meeting-smoke-evidence/remote-phone.png
+          agent-browser wait 60000
 
       - name: Close the disposable browser
         if: always()
