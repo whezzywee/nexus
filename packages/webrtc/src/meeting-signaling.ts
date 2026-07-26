@@ -47,6 +47,7 @@ export class MeetingSignalingClient {
   private key: CryptoKey | null = null;
   private sendSequence = 0;
   private readonly receiveSequences = new Map<string, number>();
+  private incomingMessages = Promise.resolve();
   private intentionallyClosed = false;
 
   constructor(private readonly options: MeetingSignalingOptions) {}
@@ -61,6 +62,7 @@ export class MeetingSignalingClient {
     const socket = this.options.socketFactory?.(socketUrl) ?? new WebSocket(socketUrl);
     this.socket = socket;
     this.intentionallyClosed = false;
+    this.incomingMessages = Promise.resolve();
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -94,7 +96,13 @@ export class MeetingSignalingClient {
           clearTimeout(timer);
           socket.removeEventListener("message", onMessage);
           this.options.events.onReady(frame.participants);
-          socket.addEventListener("message", (next) => void this.handleMessage(next));
+          socket.addEventListener("message", (next) => {
+            this.incomingMessages = this.incomingMessages
+              .then(() => this.handleMessage(next))
+              .catch(() => {
+                this.options.events.onError("Meeting signaling could not be processed.");
+              });
+          });
           resolve();
         } else if (frame.type === "error") {
           clearTimeout(timer);

@@ -1,5 +1,32 @@
-import { describe, expect, it } from "vitest";
-import { meetingWebSocketUrl } from "./meeting-signaling";
+import { describe, expect, it, vi } from "vitest";
+import {
+  MeetingSignalingClient,
+  type MeetingSignalingEvents,
+  meetingWebSocketUrl,
+} from "./meeting-signaling";
+
+class FakeMeetingSocket extends EventTarget {
+  readyState: number = WebSocket.CONNECTING;
+  readonly sent: string[] = [];
+
+  open() {
+    this.readyState = WebSocket.OPEN;
+    this.dispatchEvent(new Event("open"));
+  }
+
+  message(frame: unknown) {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  }
+
+  send(payload: string) {
+    this.sent.push(payload);
+  }
+
+  close() {
+    this.readyState = WebSocket.CLOSED;
+    this.dispatchEvent(new Event("close"));
+  }
+}
 
 describe("meeting signaling", () => {
   it("derives a room websocket without placing the capability in its URL", () => {
@@ -19,5 +46,77 @@ describe("meeting signaling", () => {
     expect(() =>
       meetingWebSocketUrl(new URL("http://gateway.example/nexus/v1/meetings"), "01MEETINGROOM"),
     ).toThrow("WSS");
+  });
+
+  it("serializes inbound frames before asynchronous signal processing", async () => {
+    const socket = new FakeMeetingSocket();
+    let socketCreated!: () => void;
+    const socketObserved = new Promise<void>((resolve) => {
+      socketCreated = resolve;
+    });
+    const events: MeetingSignalingEvents = {
+      onReady: vi.fn(),
+      onParticipantJoined: vi.fn(),
+      onParticipantLeft: vi.fn(),
+      onSignal: vi.fn(),
+      onError: vi.fn(),
+      onDisconnected: vi.fn(),
+    };
+    const client = new MeetingSignalingClient({
+      endpoint: new URL("https://gateway.example/nexus/v1/meetings"),
+      invite: {
+        version: 1,
+        roomId: "01MEETINGROOM",
+        roomName: "Friends meeting",
+        accessToken: "v1.test.signature",
+        roomKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        expiresAt: Date.now() + 60_000,
+      },
+      participantId: "phone-local",
+      events,
+      socketFactory: () => {
+        socketCreated();
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    const connected = client.connect();
+    await socketObserved;
+    socket.open();
+    socket.message({ type: "ready", participants: [] });
+    await connected;
+
+    let releaseFirst!: () => void;
+    const firstPaused = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstObserved = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const handled: string[] = [];
+    const internals = client as unknown as {
+      handleMessage(event: MessageEvent): Promise<void>;
+    };
+    internals.handleMessage = async (event) => {
+      const frame = JSON.parse(String(event.data)) as { marker: string };
+      handled.push(`start:${frame.marker}`);
+      if (frame.marker === "first") {
+        firstStarted();
+        await firstPaused;
+      }
+      handled.push(`finish:${frame.marker}`);
+    };
+
+    socket.message({ marker: "first" });
+    await firstObserved;
+    socket.message({ marker: "second" });
+    await Promise.resolve();
+    expect(handled).toEqual(["start:first"]);
+
+    releaseFirst();
+    await vi.waitFor(() => {
+      expect(handled).toEqual(["start:first", "finish:first", "start:second", "finish:second"]);
+    });
   });
 });
